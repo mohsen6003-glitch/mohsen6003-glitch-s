@@ -1,0 +1,7 @@
+{
+  "name": "GasExportManager",
+  "description": "یک سیستم جامع مدیریت صادرات گاز با قابلیت ثبت رانندگان، مدیریت صف، گزارش‌های مالی و دستیار هوشمند با قابلیت جستجو و نقشه.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
