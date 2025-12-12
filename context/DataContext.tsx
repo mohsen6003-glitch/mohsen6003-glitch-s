@@ -16,16 +16,22 @@ interface DataContextType {
   exchangeRates: ExchangeRates;
   
   addDriver: (driver: Omit<Driver, 'id'>) => void;
+  updateDriver: (id: string, updatedDriver: Partial<Driver>) => void;
   addTransaction: (transaction: Omit<Transaction, 'id'>) => void;
+  updateTransaction: (id: string, data: Partial<Transaction>) => void; // Added
   addDriverPayment: (payment: Omit<DriverPayment, 'id'>) => void;
+  updateDriverPayment: (id: string, data: Partial<DriverPayment>) => void; // Added
   addFreight: (freight: Omit<Freight, 'id'>) => void;
+  updateFreight: (id: string, data: Partial<Freight>) => void; // Added
   addToQueue: (item: Omit<QueueItem, 'id' | 'status'>) => void;
   updateQueueStatus: (id: string, status: QueueStatus) => void;
   addCompany: (company: Omit<Company, 'id'>) => void;
   addPurchase: (purchase: Omit<Purchase, 'id'>) => void;
+  updatePurchase: (id: string, data: Partial<Purchase>) => void; // Added
   addPartner: (partner: Omit<Partner, 'id'>) => void;
   addPartnerPayment: (payment: Omit<PartnerPayment, 'id'>) => void;
   addExpense: (expense: Omit<Expense, 'id'>) => void;
+  updateExpense: (id: string, data: Partial<Expense>) => void; // Added
   updateExchangeRates: (rates: ExchangeRates) => void;
   
   getDriverName: (id: string) => string;
@@ -33,6 +39,9 @@ interface DataContextType {
   getDriverBalance: (id: string) => number;
   getCompanyStats: (id: string) => { totalVolume: number; totalPaid: number };
   getSystemFinancials: () => { totalIncome: number; totalCost: number; totalExpense: number; netProfit: number };
+  
+  getAllData: () => any;
+  importData: (data: any) => void;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -118,9 +127,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setDrivers(prev => [...prev, newDriver]);
   };
 
+  const updateDriver = (id: string, updatedDriver: Partial<Driver>) => {
+    setDrivers(prev => prev.map(d => d.id === id ? { ...d, ...updatedDriver } : d));
+  };
+
   const addTransaction = (transaction: Omit<Transaction, 'id'>) => {
     const newTransaction = { ...transaction, id: Date.now().toString() };
     setTransactions(prev => [...prev, newTransaction]);
+  };
+
+  const updateTransaction = (id: string, data: Partial<Transaction>) => {
+    setTransactions(prev => prev.map(item => item.id === id ? { ...item, ...data } : item));
   };
 
   const addDriverPayment = (payment: Omit<DriverPayment, 'id'>) => {
@@ -128,9 +145,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setDriverPayments(prev => [...prev, newPayment]);
   };
 
+  const updateDriverPayment = (id: string, data: Partial<DriverPayment>) => {
+    setDriverPayments(prev => prev.map(item => item.id === id ? { ...item, ...data } : item));
+  };
+
   const addFreight = (freight: Omit<Freight, 'id'>) => {
     const newFreight = { ...freight, id: Date.now().toString() };
     setFreights(prev => [...prev, newFreight]);
+  };
+
+  const updateFreight = (id: string, data: Partial<Freight>) => {
+    setFreights(prev => prev.map(item => item.id === id ? { ...item, ...data } : item));
   };
 
   const addToQueue = (item: Omit<QueueItem, 'id' | 'status'>) => {
@@ -152,6 +177,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setPurchases(prev => [...prev, newPurchase]);
   };
 
+  const updatePurchase = (id: string, data: Partial<Purchase>) => {
+    setPurchases(prev => prev.map(item => item.id === id ? { ...item, ...data } : item));
+  };
+
   const addPartner = (partner: Omit<Partner, 'id'>) => {
     const newPartner = { ...partner, id: Date.now().toString() };
     setPartners(prev => [...prev, newPartner]);
@@ -166,6 +195,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const newExpense = { ...expense, id: Date.now().toString() };
     setExpenses(prev => [...prev, newExpense]);
   };
+
+  const updateExpense = (id: string, data: Partial<Expense>) => {
+    setExpenses(prev => prev.map(item => item.id === id ? { ...item, ...data } : item));
+  };
   
   const updateExchangeRates = (rates: ExchangeRates) => {
       setExchangeRates(rates);
@@ -179,22 +212,24 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return companies.find(c => c.id === id)?.name || 'نامشخص';
   };
 
-  // Calculate Driver Balance in Base Currency (Toman)
-  // Logic: (Total Paid by Driver + Total Freight Earnings) - (Total Gas Cost)
+  // Calculate Driver Balance
+  // UPDATED LOGIC:
+  // Balance = Total Freights (Earned) + Total Transactions (Gas Loads/Cost) - Total Payments (Received by driver)
+  // Transactions (Gas Sales) are now considered as credit/earnings for the driver (Load Cost).
   const getDriverBalance = (id: string) => {
-    const totalDebt = transactions
-      .filter(t => t.driverId === id)
-      .reduce((sum, t) => sum + t.totalPrice, 0);
-    
-    const totalPaid = driverPayments
+    const totalPaidToDriver = driverPayments
       .filter(p => p.driverId === id)
       .reduce((sum, p) => sum + p.amount, 0);
 
-    const totalFreight = freights
+    const totalFreightEarnings = freights
       .filter(f => f.driverId === id)
       .reduce((sum, f) => sum + f.amount, 0);
+      
+    const totalTransactionEarnings = transactions
+      .filter(t => t.driverId === id)
+      .reduce((sum, t) => sum + t.totalPrice, 0);
 
-    return (totalPaid + totalFreight) - totalDebt;
+    return (totalFreightEarnings + totalTransactionEarnings) - totalPaidToDriver;
   };
 
   // Calculate Total Volume and Money for a Company
@@ -213,12 +248,45 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return { totalIncome, totalCost, totalExpense, netProfit };
   };
 
+  const getAllData = () => {
+    return {
+      drivers,
+      transactions,
+      driverPayments,
+      freights,
+      queue,
+      companies,
+      purchases,
+      partners,
+      partnerPayments,
+      expenses,
+      exchangeRates,
+      backupDate: new Date().toISOString(),
+      version: '2.2.0'
+    };
+  };
+
+  const importData = (data: any) => {
+    if (data.drivers) setDrivers(data.drivers);
+    if (data.transactions) setTransactions(data.transactions);
+    if (data.driverPayments) setDriverPayments(data.driverPayments);
+    if (data.freights) setFreights(data.freights);
+    if (data.queue) setQueue(data.queue);
+    if (data.companies) setCompanies(data.companies);
+    if (data.purchases) setPurchases(data.purchases);
+    if (data.partners) setPartners(data.partners);
+    if (data.partnerPayments) setPartnerPayments(data.partnerPayments);
+    if (data.expenses) setExpenses(data.expenses);
+    if (data.exchangeRates) setExchangeRates(data.exchangeRates);
+  };
+
   return (
     <DataContext.Provider value={{ 
       drivers, transactions, driverPayments, freights, queue, companies, purchases, partners, partnerPayments, expenses, exchangeRates,
-      addDriver, addTransaction, addDriverPayment, addFreight, addToQueue, updateQueueStatus, 
-      addCompany, addPurchase, addPartner, addPartnerPayment, addExpense, updateExchangeRates,
-      getDriverName, getCompanyName, getDriverBalance, getCompanyStats, getSystemFinancials
+      addDriver, updateDriver, addTransaction, updateTransaction, addDriverPayment, updateDriverPayment, addFreight, updateFreight, addToQueue, updateQueueStatus, 
+      addCompany, addPurchase, updatePurchase, addPartner, addPartnerPayment, addExpense, updateExpense, updateExchangeRates,
+      getDriverName, getCompanyName, getDriverBalance, getCompanyStats, getSystemFinancials,
+      getAllData, importData
     }}>
       {children}
     </DataContext.Provider>

@@ -1,6 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import { Wallet, Plus, Calendar, Filter, ChevronDown } from 'lucide-react';
+import DatePicker, { DateObject } from "react-multi-date-picker";
+import persian from "react-date-object/calendars/persian";
+import persian_fa from "react-date-object/locales/persian_fa";
 
 type DateFilterType = 'all' | 'today' | 'week' | 'month';
 
@@ -12,6 +15,9 @@ const ExpenseManager: React.FC = () => {
     category: 'عمومی',
     description: ''
   });
+  
+  // Initialize with today's date
+  const [selectedDate, setSelectedDate] = useState<DateObject | null>(new DateObject({ calendar: persian, locale: persian_fa }));
   const [dateFilter, setDateFilter] = useState<DateFilterType>('all');
 
   const categories = ['حقوق و دستمزد', 'اجاره', 'تعمیرات و نگهداری', 'قبوض', 'حمل و نقل', 'خوراک', 'عمومی'];
@@ -19,16 +25,22 @@ const ExpenseManager: React.FC = () => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.title || !form.amount) return alert("عنوان و مبلغ الزامی است");
+    if (!selectedDate) return alert("لطفا تاریخ را انتخاب کنید");
+
+    // Format date nicely: "1402/05/10 ساعت 14:30"
+    const formattedDate = selectedDate.format("YYYY/MM/DD HH:mm");
 
     addExpense({
       title: form.title,
       amount: parseFloat(form.amount),
       category: form.category,
-      date: new Date().toLocaleString('fa-IR'),
+      date: formattedDate,
       description: form.description
     });
     
     setForm({ title: '', amount: '', category: 'عمومی', description: '' });
+    // Reset date to now
+    setSelectedDate(new DateObject({ calendar: persian, locale: persian_fa }));
   };
 
   // Filter Logic
@@ -36,7 +48,6 @@ const ExpenseManager: React.FC = () => {
     const now = new Date();
     const startOfDay = new Date(now.setHours(0, 0, 0, 0)).getTime();
     
-    const currentDay = now.getDay(); 
     // Simple logic: Go back to last Saturday or Sunday. Let's use simple "Last 7 days" style or Standard Week
     const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime(); 
     
@@ -70,7 +81,7 @@ const ExpenseManager: React.FC = () => {
           <h2 className="text-xl font-bold text-slate-800">مدیریت هزینه‌ها</h2>
         </div>
 
-        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
           <div className="lg:col-span-1">
             <label className="block text-sm font-medium text-slate-700 mb-1">عنوان هزینه</label>
             <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} className="w-full p-2 border border-slate-300 rounded-lg" placeholder="مثال: قبض برق" />
@@ -82,16 +93,28 @@ const ExpenseManager: React.FC = () => {
             </select>
           </div>
           <div className="lg:col-span-1">
-            <label className="block text-sm font-medium text-slate-700 mb-1">مبلغ (تومان/ریال)</label>
+             <label className="block text-sm font-medium text-slate-700 mb-1">تاریخ پرداخت</label>
+             <DatePicker 
+                value={selectedDate}
+                onChange={setSelectedDate}
+                calendar={persian}
+                locale={persian_fa}
+                calendarPosition="bottom-right"
+                inputClass="rmdp-input" // This class is defined in index.html styles
+                placeholder="انتخاب تاریخ..."
+             />
+          </div>
+          <div className="lg:col-span-1">
+            <label className="block text-sm font-medium text-slate-700 mb-1">مبلغ (تومان)</label>
             <input type="number" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} className="w-full p-2 border border-slate-300 rounded-lg" placeholder="مبلغ..." />
           </div>
            <div className="lg:col-span-1">
             <label className="block text-sm font-medium text-slate-700 mb-1">توضیحات</label>
-            <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="w-full p-2 border border-slate-300 rounded-lg" placeholder="توضیحات اختیاری" />
+            <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="w-full p-2 border border-slate-300 rounded-lg" placeholder="اختیاری" />
           </div>
           <div className="lg:col-span-1">
             <button type="submit" className="w-full p-2 bg-red-600 hover:bg-red-700 text-white rounded-lg flex items-center justify-center gap-2">
-              <Plus size={18} /> ثبت هزینه
+              <Plus size={18} /> ثبت
             </button>
           </div>
         </form>
@@ -145,8 +168,9 @@ const ExpenseManager: React.FC = () => {
                       <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded text-xs">{exp.category}</span>
                   </td>
                   <td className="px-6 py-4 font-bold text-red-600">{exp.amount.toLocaleString()}</td>
-                  <td className="px-6 py-4 text-slate-500 text-sm flex items-center gap-1">
-                      <Calendar size={14}/> {exp.date}
+                  <td className="px-6 py-4 text-slate-500 text-sm flex items-center gap-1" dir="ltr">
+                      <Calendar size={14} className="text-slate-400"/> 
+                      <span className="text-right">{exp.date}</span>
                   </td>
                   <td className="px-6 py-4 text-slate-500 text-sm">{exp.description || '-'}</td>
                 </tr>

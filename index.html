@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
   <head>
@@ -19,6 +20,24 @@
           -ms-overflow-style: none;
           scrollbar-width: none;
       }
+      /* DatePicker overrides to match Tailwind */
+      .rmdp-container {
+        width: 100%;
+      }
+      .rmdp-input {
+        width: 100%;
+        height: 42px; /* Match other inputs */
+        border: 1px solid #cbd5e1;
+        border-radius: 0.5rem;
+        padding: 0.5rem;
+        font-family: 'Vazirmatn', sans-serif;
+        font-size: 0.875rem; /* text-sm */
+        outline: none;
+      }
+      .rmdp-input:focus {
+        border-color: #dc2626; /* red-600 */
+        box-shadow: 0 0 0 1px #dc2626;
+      }
     </style>
   <script type="importmap">
 {
@@ -28,7 +47,13 @@
     "react": "https://aistudiocdn.com/react@^19.2.1",
     "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
     "recharts": "https://aistudiocdn.com/recharts@^3.5.1",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/"
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "react-dom": "https://aistudiocdn.com/react-dom@^19.2.1",
+    "react-multi-date-picker": "https://esm.sh/react-multi-date-picker@4.4.1?external=react,react-dom",
+    "react-date-object": "https://esm.sh/react-date-object@2.1.9?external=react,react-dom",
+    "react-date-object/": "https://esm.sh/react-date-object@2.1.9/",
+    "html2canvas": "https://esm.sh/html2canvas@1.4.1",
+    "jspdf": "https://esm.sh/jspdf@2.5.1"
   }
 }
 </script>

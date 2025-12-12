@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DataProvider, useData } from './context/DataContext';
 import { Tab } from './types';
 import { 
@@ -15,7 +15,8 @@ import {
   ShoppingCart,
   Handshake,
   Wallet,
-  Coins
+  Coins,
+  Database
 } from 'lucide-react';
 
 import DriverRegistration from './components/DriverRegistration';
@@ -28,6 +29,7 @@ import CompanyManager from './components/CompanyManager';
 import PurchaseEntry from './components/PurchaseEntry';
 import PartnerManager from './components/PartnerManager';
 import ExpenseManager from './components/ExpenseManager';
+import BackupManager from './components/BackupManager';
 
 const HeaderContent: React.FC<{ 
     setSidebarOpen: (o: boolean) => void, 
@@ -36,8 +38,21 @@ const HeaderContent: React.FC<{
     const { exchangeRates, updateExchangeRates } = useData();
     const [localRates, setLocalRates] = useState(exchangeRates);
 
+    // Sync local state with context when context updates (e.g. initial load)
+    useEffect(() => {
+        setLocalRates(exchangeRates);
+    }, [exchangeRates]);
+
     const handleRateChange = (curr: 'usd' | 'aed', val: string) => {
-        const newRates = { ...localRates, [curr]: parseFloat(val) || 0 };
+        const value = parseFloat(val) || 0;
+        let newRates = { ...localRates, [curr]: value };
+
+        if (curr === 'usd') {
+            // Auto-calculate AED based on USD / 3.67
+            // Example: 60000 / 3.67 = 16348
+            newRates.aed = Math.round(value / 3.67);
+        }
+
         setLocalRates(newRates);
         updateExchangeRates(newRates);
     };
@@ -54,6 +69,7 @@ const HeaderContent: React.FC<{
             case 'partners': return 'مدیریت شرکا';
             case 'expenses': return 'مدیریت هزینه‌ها';
             case 'ai-chat': return 'دستیار هوشمند';
+            case 'backup': return 'پشتیبان‌گیری';
             default: return '';
         }
     }
@@ -93,6 +109,9 @@ const HeaderContent: React.FC<{
                         onChange={(e) => handleRateChange('aed', e.target.value)}
                         className="w-20 text-xs p-1 border border-slate-300 rounded text-center focus:ring-1 focus:ring-blue-500 outline-none" 
                     />
+                </div>
+                <div className="text-[10px] text-slate-400 font-mono pt-1">
+                    (AED = USD / 3.67)
                 </div>
              </div>
 
@@ -142,6 +161,7 @@ const App: React.FC = () => {
       case 'partners': return <PartnerManager />;
       case 'expenses': return <ExpenseManager />;
       case 'ai-chat': return <AIChat />;
+      case 'backup': return <BackupManager />;
       default: return <DriverRegistration />;
     }
   };
@@ -164,12 +184,13 @@ const App: React.FC = () => {
             <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-6">بازرگانی</div>
             <NavItem tab="companies" icon={Building2} label="شرکت‌ها" />
             <NavItem tab="purchases" icon={ShoppingCart} label="خرید گاز" />
-            <NavItem tab="expenses" icon={Wallet} label="هزینه‌های جاری" />
+            <NavItem tab="expenses" icon={Wallet} label="هزینه‌ها جاری" />
             <NavItem tab="partners" icon={Handshake} label="شرکا و سود" />
 
             <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-6">داده‌ها و گزارش‌ها</div>
             <NavItem tab="drivers" icon={Users} label="لیست رانندگان" />
             <NavItem tab="reports" icon={FileText} label="گزارش‌های مالی" />
+            <NavItem tab="backup" icon={Database} label="پشتیبان‌گیری" />
 
             <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-6">دستیار</div>
             <NavItem tab="ai-chat" icon={Bot} label="دستیار هوشمند" />
@@ -201,6 +222,7 @@ const App: React.FC = () => {
             <NavItem tab="partners" icon={Handshake} label="شرکا و سود" />
             <NavItem tab="drivers" icon={Users} label="لیست رانندگان" />
             <NavItem tab="reports" icon={FileText} label="گزارش‌های مالی" />
+            <NavItem tab="backup" icon={Database} label="پشتیبان‌گیری" />
             <NavItem tab="ai-chat" icon={Bot} label="دستیار هوشمند" />
           </nav>
         </aside>

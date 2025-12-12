@@ -1,13 +1,16 @@
 
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
-import { Truck, CheckCircle, Clock, PlayCircle, XCircle, AlertTriangle, Printer, Download, User, FileText, Hash } from 'lucide-react';
+import { Truck, CheckCircle, Clock, PlayCircle, XCircle, AlertTriangle, Printer, Download, User, FileText, Hash, History, Droplets, FileDown } from 'lucide-react';
 import { QueueStatus } from '../types';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 
 const QueueManager: React.FC = () => {
-  const { drivers, queue, addToQueue, updateQueueStatus, getDriverName } = useData();
+  const { drivers, queue, addToQueue, updateQueueStatus, transactions } = useData();
   const [selectedDriver, setSelectedDriver] = useState('');
   const [destination, setDestination] = useState('');
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
 
   const handleAddToQueue = () => {
     if (!selectedDriver) {
@@ -26,8 +29,13 @@ const QueueManager: React.FC = () => {
       destination: destination || 'نامشخص',
       entryTime: new Date().toLocaleString('fa-IR')
     });
+    
+    // Clear fields automatically
     setDestination('');
     setSelectedDriver('');
+    
+    // Show success message
+    alert("راننده با موفقیت به صف اضافه شد.");
   };
 
   // Filter active queue items
@@ -58,6 +66,15 @@ const QueueManager: React.FC = () => {
       }
   };
 
+  const getLastDriverActivity = (driverId: string) => {
+    // Filter transactions for this driver and sort by ID (descending) as ID is timestamp
+    const history = transactions
+        .filter(t => t.driverId === driverId)
+        .sort((a, b) => parseInt(b.id) - parseInt(a.id));
+    
+    return history.length > 0 ? history[0] : null;
+  };
+
   const handlePrint = () => {
       window.print();
   };
@@ -65,10 +82,13 @@ const QueueManager: React.FC = () => {
   const handleExportCSV = () => {
       if (activeQueue.length === 0) return alert('داده‌ای برای خروجی وجود ندارد.');
 
-      const headers = ['نوبت', 'نام راننده', 'کد ملی', 'تلفن', 'شماره گواهینامه', 'پلاک خودرو', 'شماره تانک', 'مقصد', 'زمان ورود', 'وضعیت'];
+      const headers = ['نوبت', 'نام راننده', 'کد ملی', 'تلفن', 'شماره گواهینامه', 'پلاک خودرو', 'شماره تانک', 'مقصد', 'زمان ورود', 'وضعیت', 'آخرین بارگیری'];
       
       const rows = activeQueue.map((item, index) => {
           const driver = drivers.find(d => d.id === item.driverId);
+          const lastActivity = getLastDriverActivity(item.driverId);
+          const lastActivityStr = lastActivity ? `${lastActivity.date} (حجم: ${lastActivity.volume})` : 'بدون سابقه';
+
           return [
             index + 1,
             driver ? driver.fullName : 'نامشخص',
@@ -79,7 +99,8 @@ const QueueManager: React.FC = () => {
             driver ? driver.tankNumber : '-',
             item.destination,
             item.entryTime,
-            item.status === 'WAIT' ? 'در انتظار' : 'در حال بارگیری'
+            item.status === 'WAIT' ? 'در انتظار' : 'در حال بارگیری',
+            lastActivityStr
           ];
       });
 
@@ -94,6 +115,58 @@ const QueueManager: React.FC = () => {
       link.download = `queue_full_details_${new Date().toLocaleDateString('fa-IR').replace(/\//g, '-')}.csv`;
       link.click();
       document.body.removeChild(link);
+  };
+
+  const handleExportPDF = async () => {
+      if (activeQueue.length === 0) return alert('داده‌ای برای خروجی وجود ندارد.');
+      
+      setIsExportingPdf(true);
+      const input = document.getElementById('queue-report-container');
+      
+      if (input) {
+          try {
+              // Temporarily adjust styles for capture
+              const originalOverflow = input.style.overflow;
+              input.style.overflow = 'visible';
+              
+              // Capture using html2canvas to preserve Farsi fonts and styles
+              const canvas = await html2canvas(input, {
+                  scale: 2, // Higher resolution
+                  useCORS: true,
+                  backgroundColor: '#ffffff'
+              });
+              
+              const imgData = canvas.toDataURL('image/png');
+              const pdf = new jsPDF('p', 'mm', 'a4');
+              
+              const pdfWidth = pdf.internal.pageSize.getWidth();
+              const pdfHeight = pdf.internal.pageSize.getHeight();
+              
+              const imgWidth = canvas.width;
+              const imgHeight = canvas.height;
+              
+              const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
+              const imgX = (pdfWidth - imgWidth * ratio) / 2;
+              
+              // Calculate height in PDF based on width ratio (fit width)
+              const finalImgWidth = pdfWidth; 
+              const finalImgHeight = (imgHeight * pdfWidth) / imgWidth;
+
+              // If content is longer than one page, simple scaling for now (or split pages logic could go here)
+              // For this implementation, we fit width and let it flow
+              pdf.addImage(imgData, 'PNG', 0, 10, finalImgWidth, finalImgHeight);
+              
+              pdf.save(`queue-report-${new Date().toLocaleDateString('fa-IR').replace(/\//g, '-')}.pdf`);
+              
+              // Restore styles
+              input.style.overflow = originalOverflow;
+          } catch (error) {
+              console.error("PDF Export Error:", error);
+              alert("خطا در ایجاد فایل PDF");
+          } finally {
+              setIsExportingPdf(false);
+          }
+      }
   };
 
   return (
@@ -146,7 +219,7 @@ const QueueManager: React.FC = () => {
       </div>
 
       {/* Queue List */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden print:shadow-none print:border-0">
+      <div id="queue-report-container" className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden print:shadow-none print:border-0">
         <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4 print:border-b-2 print:border-slate-800">
             <div className="flex items-center gap-3 w-full sm:w-auto">
                  <div className="flex items-center gap-2">
@@ -156,12 +229,20 @@ const QueueManager: React.FC = () => {
                  <span className="text-sm bg-slate-100 text-slate-600 px-3 py-1 rounded-full font-medium print:hidden">{activeQueue.length} فعال</span>
             </div>
             
-            <div className="flex gap-2 w-full sm:w-auto print:hidden">
+            <div className="flex gap-2 w-full sm:w-auto print:hidden" data-html2canvas-ignore="true">
+                <button 
+                    onClick={handleExportPDF}
+                    disabled={isExportingPdf}
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded-lg hover:bg-red-100 transition-colors text-sm font-medium disabled:opacity-50"
+                >
+                    {isExportingPdf ? <span className="animate-spin text-lg">⌛</span> : <FileDown size={16} />} 
+                    PDF
+                </button>
                 <button 
                     onClick={handleExportCSV}
                     className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-2 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors text-sm font-medium"
                 >
-                    <Download size={16} /> اکسل کامل
+                    <Download size={16} /> اکسل
                 </button>
                 <button 
                     onClick={handlePrint}
@@ -179,20 +260,23 @@ const QueueManager: React.FC = () => {
                 <th className="px-6 py-4">نوبت</th>
                 <th className="px-6 py-4">مشخصات راننده</th>
                 <th className="px-6 py-4">مشخصات خودرو</th>
+                <th className="px-6 py-4">آخرین بارگیری</th>
                 <th className="px-6 py-4">مقصد</th>
                 <th className="px-6 py-4">زمان ورود</th>
                 <th className="px-6 py-4">وضعیت</th>
-                <th className="px-6 py-4 text-center print:hidden">تغییر وضعیت</th>
+                <th className="px-6 py-4 text-center print:hidden" data-html2canvas-ignore="true">تغییر وضعیت</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 print:divide-slate-300">
               {activeQueue.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-8 text-center text-slate-400 italic">هیچ راننده‌ای در صف نیست</td>
+                  <td colSpan={8} className="px-6 py-8 text-center text-slate-400 italic">هیچ راننده‌ای در صف نیست</td>
                 </tr>
               ) : (
                 activeQueue.map((item, index) => {
                     const driver = drivers.find(d => d.id === item.driverId);
+                    const lastActivity = getLastDriverActivity(item.driverId);
+
                     return (
                         <tr key={item.id} className={`hover:bg-slate-50 transition-colors print:hover:bg-transparent ${item.status === 'LOADING' ? 'bg-blue-50/50 print:bg-transparent' : ''}`}>
                             <td className="px-6 py-4 font-mono text-slate-500 font-bold">#{index + 1}</td>
@@ -213,12 +297,29 @@ const QueueManager: React.FC = () => {
                                     <div className="text-xs text-slate-500 mt-1">تانکر: <span className="font-mono font-medium text-slate-700">{driver?.tankNumber || '-'}</span></div>
                                 </div>
                             </td>
+                            <td className="px-6 py-4">
+                                {lastActivity ? (
+                                    <div className="flex flex-col gap-1.5">
+                                        <div className="flex items-center gap-1.5 text-xs text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-100 w-fit">
+                                            <History size={12} className="text-slate-400" />
+                                            <span>{lastActivity.date.split(' ')[0]}</span>
+                                        </div>
+                                        <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 w-fit">
+                                            <Droplets size={12} className="text-emerald-500" />
+                                            <span dir="ltr">{lastActivity.volume.toLocaleString()}</span>
+                                            <span className="text-[10px] opacity-75">واحد</span>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <span className="text-xs text-slate-400 italic">بدون سابقه</span>
+                                )}
+                            </td>
                             <td className="px-6 py-4 text-slate-600">{item.destination}</td>
                             <td className="px-6 py-4 text-slate-500 text-sm" dir="ltr">{item.entryTime}</td>
                             <td className="px-6 py-4">
                             {getStatusBadge(item.status)}
                             </td>
-                            <td className="px-6 py-4 print:hidden">
+                            <td className="px-6 py-4 print:hidden" data-html2canvas-ignore="true">
                                 <div className="flex items-center justify-center gap-2">
                                     {item.status === 'WAIT' && (
                                         <>

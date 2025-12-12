@@ -36,6 +36,7 @@ export interface Freight {
   origin: string;
   destination: string;
   description: string;
+  trackingCode?: string;
 }
 
 export type QueueStatus = 'WAIT' | 'LOADING' | 'DONE' | 'CANCELLED';
@@ -94,7 +95,7 @@ export interface ExchangeRates {
   aed: number;
 }
 
-export type Tab = 'register' | 'queue' | 'entry' | 'drivers' | 'reports' | 'companies' | 'purchases' | 'partners' | 'expenses' | 'ai-chat';
+export type Tab = 'register' | 'queue' | 'entry' | 'drivers' | 'reports' | 'companies' | 'purchases' | 'partners' | 'expenses' | 'ai-chat' | 'backup';
 
 export interface ChatMessage {
   id: string;

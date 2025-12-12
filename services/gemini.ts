@@ -15,7 +15,8 @@ const getApiKey = () => {
 
 const apiKey = getApiKey();
 
-const ai = new GoogleGenAI({ apiKey });
+// Prevent crash if API Key is missing during initialization by making ai nullable
+const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
 export const sendMessageToGemini = async (
   message: string,
@@ -24,7 +25,7 @@ export const sendMessageToGemini = async (
   userLocation?: { latitude: number; longitude: number }
 ): Promise<{ text: string; groundingMetadata?: any }> => {
   try {
-    if (!apiKey) {
+    if (!ai) {
       return { text: "خطا: کلید API یافت نشد. لطفاً تنظیمات محیطی را بررسی کنید." };
     }
 
