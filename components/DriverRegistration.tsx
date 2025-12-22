@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { UserPlus, Save } from 'lucide-react';
@@ -40,28 +41,28 @@ const DriverRegistration: React.FC = () => {
 
         <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">نام و نام خانوادگی</label>
-            <input name="fullName" value={form.fullName} onChange={handleChange} className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all" placeholder="مثال: علی رضایی" />
+            <label htmlFor="fullName" className="block text-sm font-medium text-slate-700 mb-1">نام و نام خانوادگی</label>
+            <input id="fullName" name="fullName" value={form.fullName} onChange={handleChange} className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all" placeholder="مثال: علی رضایی" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">کد ملی</label>
-            <input name="nationalId" value={form.nationalId} onChange={handleChange} className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all" placeholder="کد ملی ۱۰ رقمی" />
+            <label htmlFor="nationalId" className="block text-sm font-medium text-slate-700 mb-1">کد ملی</label>
+            <input id="nationalId" name="nationalId" value={form.nationalId} onChange={handleChange} className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all" placeholder="کد ملی ۱۰ رقمی" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">شماره گواهینامه</label>
-            <input name="licenseNo" value={form.licenseNo} onChange={handleChange} className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all" placeholder="شماره گواهینامه" />
+            <label htmlFor="licenseNo" className="block text-sm font-medium text-slate-700 mb-1">شماره گواهینامه</label>
+            <input id="licenseNo" name="licenseNo" value={form.licenseNo} onChange={handleChange} className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all" placeholder="شماره گواهینامه" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">شماره تماس</label>
-            <input name="phone" value={form.phone} onChange={handleChange} className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all" placeholder="0912..." />
+            <label htmlFor="phone" className="block text-sm font-medium text-slate-700 mb-1">شماره تماس</label>
+            <input id="phone" name="phone" value={form.phone} onChange={handleChange} className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all" placeholder="0912..." />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">شماره پلاک</label>
-            <input name="plateNumber" value={form.plateNumber} onChange={handleChange} className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all" placeholder="۱۲ الف ۳۴۵ ایران ۶۶" />
+            <label htmlFor="plateNumber" className="block text-sm font-medium text-slate-700 mb-1">شماره پلاک</label>
+            <input id="plateNumber" name="plateNumber" value={form.plateNumber} onChange={handleChange} className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all" placeholder="۱۲ الف ۳۴۵ ایران ۶۶" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">شماره تانکر</label>
-            <input name="tankNumber" value={form.tankNumber} onChange={handleChange} className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all" placeholder="شناسه تانکر" />
+            <label htmlFor="tankNumber" className="block text-sm font-medium text-slate-700 mb-1">شماره تانکر</label>
+            <input id="tankNumber" name="tankNumber" value={form.tankNumber} onChange={handleChange} className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all" placeholder="شناسه تانکر" />
           </div>
 
           <div className="md:col-span-2 mt-4">

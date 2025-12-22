@@ -12,12 +12,15 @@ export interface Driver {
 export interface Transaction {
   id: string;
   driverId: string;
+  companyId?: string; // Supplier Company (New)
+  receiverId?: string; // Receiver/Destination (New)
   date: string;
   volume: number;
   price: number;
   totalPrice: number;
+  freightPrice?: number; 
   description: string;
-  billOfLading?: string; // Added field
+  billOfLading?: string;
 }
 
 export interface DriverPayment {
@@ -50,6 +53,13 @@ export interface QueueItem {
 }
 
 export interface Company {
+  id: string;
+  name: string;
+  phone: string;
+  address: string;
+}
+
+export interface Receiver {
   id: string;
   name: string;
   phone: string;
@@ -90,12 +100,33 @@ export interface Expense {
   description: string;
 }
 
+export interface Exchange {
+  id: string;
+  name: string;
+  phone: string;
+  address: string;
+}
+
+export interface ExchangeTransaction {
+  id: string;
+  exchangeName: string;       // نام صرافی
+  amountToman: number;        // مبلغ به تومان
+  accountHolder: string;      // واریز حساب شخص
+  aedRate: number;            // نرخ درهم
+  aedDepositDate: string;     // تاریخ واریز درهم
+  aedAmount: number;          // تحویل درهم
+  aedDeliveryDate: string;    // تاریخ تحویل درهم
+  receiverName: string;       // نام گیرنده
+  accountCode: string;        // کد حساب شخصی
+  description: string;        // توضیحات
+}
+
 export interface ExchangeRates {
   usd: number;
   aed: number;
 }
 
-export type Tab = 'register' | 'queue' | 'entry' | 'drivers' | 'reports' | 'companies' | 'purchases' | 'partners' | 'expenses' | 'ai-chat' | 'backup';
+export type Tab = 'register' | 'queue' | 'entry' | 'drivers' | 'reports' | 'companies' | 'receivers' | 'purchases' | 'partners' | 'expenses' | 'exchange' | 'ai-chat' | 'backup';
 
 export interface ChatMessage {
   id: string;

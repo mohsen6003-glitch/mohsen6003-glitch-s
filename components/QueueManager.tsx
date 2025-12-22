@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
-import { Truck, CheckCircle, Clock, PlayCircle, XCircle, AlertTriangle, Printer, Download, User, FileText, Hash, History, Droplets, FileDown } from 'lucide-react';
+import { Truck, CheckCircle, Clock, PlayCircle, XCircle, AlertTriangle, Printer, Download, User, FileText, Hash, History, Droplets, FileDown, Settings2, CheckSquare, Square } from 'lucide-react';
 import { QueueStatus } from '../types';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
@@ -11,6 +11,36 @@ const QueueManager: React.FC = () => {
   const [selectedDriver, setSelectedDriver] = useState('');
   const [destination, setDestination] = useState('');
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+
+  // Column Selection State
+  const [showColumnSelector, setShowColumnSelector] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState<string[]>([
+      'rowNumber', 'driverDetails', 'carDetails', 'lastLoad', 'destination', 'entryTime', 'status', 'actions'
+  ]);
+
+  const availableColumns = [
+      { id: 'rowNumber', label: 'نوبت' },
+      { id: 'driverDetails', label: 'مشخصات راننده' },
+      { id: 'carDetails', label: 'مشخصات خودرو' },
+      { id: 'lastLoad', label: 'آخرین بارگیری' },
+      { id: 'destination', label: 'مقصد' },
+      { id: 'entryTime', label: 'زمان ورود' },
+      { id: 'status', label: 'وضعیت' },
+      { id: 'actions', label: 'تغییر وضعیت' },
+  ];
+
+  const toggleColumn = (id: string) => {
+    setVisibleColumns(prev => {
+        let newSet;
+        if (prev.includes(id)) {
+            newSet = prev.filter(c => c !== id);
+        } else {
+            newSet = [...prev, id];
+        }
+        // Ensure column order follows availableColumns definition
+        return availableColumns.filter(c => newSet.includes(c.id)).map(c => c.id);
+    });
+  };
 
   const handleAddToQueue = () => {
     if (!selectedDriver) {
@@ -82,6 +112,11 @@ const QueueManager: React.FC = () => {
   const handleExportCSV = () => {
       if (activeQueue.length === 0) return alert('داده‌ای برای خروجی وجود ندارد.');
 
+      // Only export visible columns logic could be applied here, 
+      // but usually CSV export includes standard fields. 
+      // For consistency with view, we could filter, but let's keep full export for now or adapt if needed.
+      // Let's stick to full export as implemented previously for robust data backup.
+      
       const headers = ['نوبت', 'نام راننده', 'کد ملی', 'تلفن', 'شماره گواهینامه', 'پلاک خودرو', 'شماره تانک', 'مقصد', 'زمان ورود', 'وضعیت', 'آخرین بارگیری'];
       
       const rows = activeQueue.map((item, index) => {
@@ -129,36 +164,26 @@ const QueueManager: React.FC = () => {
               const originalOverflow = input.style.overflow;
               input.style.overflow = 'visible';
               
-              // Capture using html2canvas to preserve Farsi fonts and styles
+              // Capture using html2canvas
               const canvas = await html2canvas(input, {
-                  scale: 2, // Higher resolution
+                  scale: 2, 
                   useCORS: true,
-                  backgroundColor: '#ffffff'
+                  backgroundColor: '#ffffff',
+                  onclone: (clonedDoc) => {
+                      const hiddenElements = clonedDoc.querySelectorAll('.print\\:hidden');
+                      hiddenElements.forEach((el: any) => el.style.display = 'none');
+                  }
               });
               
               const imgData = canvas.toDataURL('image/png');
               const pdf = new jsPDF('p', 'mm', 'a4');
               
               const pdfWidth = pdf.internal.pageSize.getWidth();
-              const pdfHeight = pdf.internal.pageSize.getHeight();
+              const imgHeight = (canvas.height * pdfWidth) / canvas.width;
               
-              const imgWidth = canvas.width;
-              const imgHeight = canvas.height;
-              
-              const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
-              const imgX = (pdfWidth - imgWidth * ratio) / 2;
-              
-              // Calculate height in PDF based on width ratio (fit width)
-              const finalImgWidth = pdfWidth; 
-              const finalImgHeight = (imgHeight * pdfWidth) / imgWidth;
-
-              // If content is longer than one page, simple scaling for now (or split pages logic could go here)
-              // For this implementation, we fit width and let it flow
-              pdf.addImage(imgData, 'PNG', 0, 10, finalImgWidth, finalImgHeight);
-              
+              pdf.addImage(imgData, 'PNG', 0, 10, pdfWidth, imgHeight);
               pdf.save(`queue-report-${new Date().toLocaleDateString('fa-IR').replace(/\//g, '-')}.pdf`);
               
-              // Restore styles
               input.style.overflow = originalOverflow;
           } catch (error) {
               console.error("PDF Export Error:", error);
@@ -229,7 +254,42 @@ const QueueManager: React.FC = () => {
                  <span className="text-sm bg-slate-100 text-slate-600 px-3 py-1 rounded-full font-medium print:hidden">{activeQueue.length} فعال</span>
             </div>
             
-            <div className="flex gap-2 w-full sm:w-auto print:hidden" data-html2canvas-ignore="true">
+            <div className="flex gap-2 w-full sm:w-auto items-center print:hidden" data-html2canvas-ignore="true">
+                {/* Column Selector */}
+                <div className="relative">
+                    <button 
+                        onClick={() => setShowColumnSelector(!showColumnSelector)}
+                        className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors text-sm font-medium"
+                    >
+                        <Settings2 size={16} /> <span className="hidden xl:inline">ستون‌ها</span>
+                    </button>
+                    
+                    {showColumnSelector && (
+                        <>
+                            <div className="fixed inset-0 z-10" onClick={() => setShowColumnSelector(false)}></div>
+                            <div className="absolute left-0 top-full mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-200 z-20 p-2 animate-in fade-in zoom-in-95 duration-100">
+                                <div className="text-xs font-bold text-slate-500 mb-2 px-2">نمایش ستون‌ها</div>
+                                <div className="space-y-1 max-h-60 overflow-y-auto custom-scrollbar">
+                                    {availableColumns.map(col => (
+                                        <button
+                                            key={col.id}
+                                            onClick={() => toggleColumn(col.id)}
+                                            className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-slate-50 rounded text-sm text-slate-700 transition-colors"
+                                        >
+                                            {visibleColumns.includes(col.id) 
+                                                ? <CheckSquare size={16} className="text-blue-600"/> 
+                                                : <Square size={16} className="text-slate-300"/>}
+                                            {col.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </>
+                    )}
+                </div>
+
+                <div className="w-px h-6 bg-slate-300 mx-1"></div>
+
                 <button 
                     onClick={handleExportPDF}
                     disabled={isExportingPdf}
@@ -257,20 +317,20 @@ const QueueManager: React.FC = () => {
           <table className="w-full text-right">
             <thead className="bg-slate-50 text-slate-600 text-xs font-semibold print:bg-white print:text-black print:border-b">
               <tr>
-                <th className="px-6 py-4">نوبت</th>
-                <th className="px-6 py-4">مشخصات راننده</th>
-                <th className="px-6 py-4">مشخصات خودرو</th>
-                <th className="px-6 py-4">آخرین بارگیری</th>
-                <th className="px-6 py-4">مقصد</th>
-                <th className="px-6 py-4">زمان ورود</th>
-                <th className="px-6 py-4">وضعیت</th>
-                <th className="px-6 py-4 text-center print:hidden" data-html2canvas-ignore="true">تغییر وضعیت</th>
+                {visibleColumns.includes('rowNumber') && <th className="px-6 py-4">نوبت</th>}
+                {visibleColumns.includes('driverDetails') && <th className="px-6 py-4">مشخصات راننده</th>}
+                {visibleColumns.includes('carDetails') && <th className="px-6 py-4">مشخصات خودرو</th>}
+                {visibleColumns.includes('lastLoad') && <th className="px-6 py-4">آخرین بارگیری</th>}
+                {visibleColumns.includes('destination') && <th className="px-6 py-4">مقصد</th>}
+                {visibleColumns.includes('entryTime') && <th className="px-6 py-4">زمان ورود</th>}
+                {visibleColumns.includes('status') && <th className="px-6 py-4">وضعیت</th>}
+                {visibleColumns.includes('actions') && <th className="px-6 py-4 text-center print:hidden" data-html2canvas-ignore="true">تغییر وضعیت</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 print:divide-slate-300">
               {activeQueue.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-8 text-center text-slate-400 italic">هیچ راننده‌ای در صف نیست</td>
+                  <td colSpan={visibleColumns.length} className="px-6 py-8 text-center text-slate-400 italic">هیچ راننده‌ای در صف نیست</td>
                 </tr>
               ) : (
                 activeQueue.map((item, index) => {
@@ -279,79 +339,95 @@ const QueueManager: React.FC = () => {
 
                     return (
                         <tr key={item.id} className={`hover:bg-slate-50 transition-colors print:hover:bg-transparent ${item.status === 'LOADING' ? 'bg-blue-50/50 print:bg-transparent' : ''}`}>
-                            <td className="px-6 py-4 font-mono text-slate-500 font-bold">#{index + 1}</td>
-                            <td className="px-6 py-4">
-                                <div className="font-bold text-slate-900">{driver?.fullName || 'ناشناس'}</div>
-                                <div className="text-xs text-slate-500 mt-1 flex flex-col gap-0.5">
-                                    <span className="flex items-center gap-1"><Hash size={12}/> کد ملی: {driver?.nationalId || '-'}</span>
-                                    <span className="flex items-center gap-1"><User size={12}/> تلفن: {driver?.phone || '-'}</span>
-                                    {driver?.licenseNo && <span className="flex items-center gap-1"><FileText size={12}/> گواهینامه: {driver.licenseNo}</span>}
-                                </div>
-                            </td>
-                            <td className="px-6 py-4">
-                                <div className="flex flex-col gap-1">
-                                    <div className="text-xs text-slate-500">پلاک:</div>
-                                    <div className="font-mono bg-slate-100 px-2 py-1 rounded w-fit border border-slate-200 text-slate-800 font-semibold print:bg-transparent print:border-black">
-                                        {driver?.plateNumber || '-'}
+                            {visibleColumns.includes('rowNumber') && (
+                                <td className="px-6 py-4 font-mono text-slate-500 font-bold">#{index + 1}</td>
+                            )}
+                            {visibleColumns.includes('driverDetails') && (
+                                <td className="px-6 py-4">
+                                    <div className="font-bold text-slate-900">{driver?.fullName || 'ناشناس'}</div>
+                                    <div className="text-xs text-slate-500 mt-1 flex flex-col gap-0.5">
+                                        <span className="flex items-center gap-1"><Hash size={12}/> کد ملی: {driver?.nationalId || '-'}</span>
+                                        <span className="flex items-center gap-1"><User size={12}/> تلفن: {driver?.phone || '-'}</span>
+                                        {driver?.licenseNo && <span className="flex items-center gap-1"><FileText size={12}/> گواهینامه: {driver.licenseNo}</span>}
                                     </div>
-                                    <div className="text-xs text-slate-500 mt-1">تانکر: <span className="font-mono font-medium text-slate-700">{driver?.tankNumber || '-'}</span></div>
-                                </div>
-                            </td>
-                            <td className="px-6 py-4">
-                                {lastActivity ? (
-                                    <div className="flex flex-col gap-1.5">
-                                        <div className="flex items-center gap-1.5 text-xs text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-100 w-fit">
-                                            <History size={12} className="text-slate-400" />
-                                            <span>{lastActivity.date.split(' ')[0]}</span>
+                                </td>
+                            )}
+                            {visibleColumns.includes('carDetails') && (
+                                <td className="px-6 py-4">
+                                    <div className="flex flex-col gap-1">
+                                        <div className="text-xs text-slate-500">پلاک:</div>
+                                        <div className="font-mono bg-slate-100 px-2 py-1 rounded w-fit border border-slate-200 text-slate-800 font-semibold print:bg-transparent print:border-black">
+                                            {driver?.plateNumber || '-'}
                                         </div>
-                                        <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 w-fit">
-                                            <Droplets size={12} className="text-emerald-500" />
-                                            <span dir="ltr">{lastActivity.volume.toLocaleString()}</span>
-                                            <span className="text-[10px] opacity-75">واحد</span>
-                                        </div>
+                                        <div className="text-xs text-slate-500 mt-1">تانکر: <span className="font-mono font-medium text-slate-700">{driver?.tankNumber || '-'}</span></div>
                                     </div>
-                                ) : (
-                                    <span className="text-xs text-slate-400 italic">بدون سابقه</span>
-                                )}
-                            </td>
-                            <td className="px-6 py-4 text-slate-600">{item.destination}</td>
-                            <td className="px-6 py-4 text-slate-500 text-sm" dir="ltr">{item.entryTime}</td>
-                            <td className="px-6 py-4">
-                            {getStatusBadge(item.status)}
-                            </td>
-                            <td className="px-6 py-4 print:hidden" data-html2canvas-ignore="true">
-                                <div className="flex items-center justify-center gap-2">
-                                    {item.status === 'WAIT' && (
-                                        <>
-                                            <button 
-                                                onClick={() => updateQueueStatus(item.id, 'LOADING')}
-                                                className="p-1.5 text-blue-600 hover:bg-blue-100 rounded tooltip"
-                                                title="شروع بارگیری"
-                                            >
-                                                <PlayCircle size={18} />
-                                            </button>
-                                            <button 
-                                                onClick={() => {
-                                                    if(window.confirm('آیا از لغو نوبت اطمینان دارید؟')) updateQueueStatus(item.id, 'CANCELLED')
-                                                }}
-                                                className="p-1.5 text-red-500 hover:bg-red-100 rounded"
-                                                title="لغو نوبت"
-                                            >
-                                                <XCircle size={18} />
-                                            </button>
-                                        </>
+                                </td>
+                            )}
+                            {visibleColumns.includes('lastLoad') && (
+                                <td className="px-6 py-4">
+                                    {lastActivity ? (
+                                        <div className="flex flex-col gap-1.5">
+                                            <div className="flex items-center gap-1.5 text-xs text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-100 w-fit">
+                                                <History size={12} className="text-slate-400" />
+                                                <span>{lastActivity.date.split(' ')[0]}</span>
+                                            </div>
+                                            <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 w-fit">
+                                                <Droplets size={12} className="text-emerald-500" />
+                                                <span dir="ltr">{lastActivity.volume.toLocaleString()}</span>
+                                                <span className="text-[10px] opacity-75">واحد</span>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <span className="text-xs text-slate-400 italic">بدون سابقه</span>
                                     )}
-                                    
-                                    {item.status === 'LOADING' && (
-                                        <button 
-                                            onClick={() => updateQueueStatus(item.id, 'DONE')}
-                                            className="flex items-center gap-1 px-3 py-1 bg-emerald-500 hover:bg-emerald-600 text-white rounded text-xs"
-                                        >
-                                            <CheckCircle size={14} /> تکمیل
-                                        </button>
-                                    )}
-                                </div>
-                            </td>
+                                </td>
+                            )}
+                            {visibleColumns.includes('destination') && (
+                                <td className="px-6 py-4 text-slate-600">{item.destination}</td>
+                            )}
+                            {visibleColumns.includes('entryTime') && (
+                                <td className="px-6 py-4 text-slate-500 text-sm" dir="ltr">{item.entryTime}</td>
+                            )}
+                            {visibleColumns.includes('status') && (
+                                <td className="px-6 py-4">
+                                    {getStatusBadge(item.status)}
+                                </td>
+                            )}
+                            {visibleColumns.includes('actions') && (
+                                <td className="px-6 py-4 print:hidden" data-html2canvas-ignore="true">
+                                    <div className="flex items-center justify-center gap-2">
+                                        {item.status === 'WAIT' && (
+                                            <>
+                                                <button 
+                                                    onClick={() => updateQueueStatus(item.id, 'LOADING')}
+                                                    className="p-1.5 text-blue-600 hover:bg-blue-100 rounded tooltip"
+                                                    title="شروع بارگیری"
+                                                >
+                                                    <PlayCircle size={18} />
+                                                </button>
+                                                <button 
+                                                    onClick={() => {
+                                                        if(window.confirm('آیا از لغو نوبت اطمینان دارید؟')) updateQueueStatus(item.id, 'CANCELLED')
+                                                    }}
+                                                    className="p-1.5 text-red-500 hover:bg-red-100 rounded"
+                                                    title="لغو نوبت"
+                                                >
+                                                    <XCircle size={18} />
+                                                </button>
+                                            </>
+                                        )}
+                                        
+                                        {item.status === 'LOADING' && (
+                                            <button 
+                                                onClick={() => updateQueueStatus(item.id, 'DONE')}
+                                                className="flex items-center gap-1 px-3 py-1 bg-emerald-500 hover:bg-emerald-600 text-white rounded text-xs"
+                                            >
+                                                <CheckCircle size={14} /> تکمیل
+                                            </button>
+                                        )}
+                                    </div>
+                                </td>
+                            )}
                         </tr>
                     );
                 })

@@ -16,7 +16,11 @@ import {
   Handshake,
   Wallet,
   Coins,
-  Database
+  Database,
+  RefreshCw,
+  Wifi,
+  Container,
+  Landmark
 } from 'lucide-react';
 
 import DriverRegistration from './components/DriverRegistration';
@@ -26,37 +30,18 @@ import DriversList from './components/DriversList';
 import FinancialReport from './components/FinancialReport';
 import AIChat from './components/AIChat';
 import CompanyManager from './components/CompanyManager';
+import ReceiverManager from './components/ReceiverManager'; 
 import PurchaseEntry from './components/PurchaseEntry';
 import PartnerManager from './components/PartnerManager';
 import ExpenseManager from './components/ExpenseManager';
 import BackupManager from './components/BackupManager';
+import ExchangeManager from './components/ExchangeManager'; 
+import LicenseGuard from './components/LicenseGuard'; // اضافه شد
 
 const HeaderContent: React.FC<{ 
     setSidebarOpen: (o: boolean) => void, 
     activeTab: Tab 
 }> = ({ setSidebarOpen, activeTab }) => {
-    const { exchangeRates, updateExchangeRates } = useData();
-    const [localRates, setLocalRates] = useState(exchangeRates);
-
-    // Sync local state with context when context updates (e.g. initial load)
-    useEffect(() => {
-        setLocalRates(exchangeRates);
-    }, [exchangeRates]);
-
-    const handleRateChange = (curr: 'usd' | 'aed', val: string) => {
-        const value = parseFloat(val) || 0;
-        let newRates = { ...localRates, [curr]: value };
-
-        if (curr === 'usd') {
-            // Auto-calculate AED based on USD / 3.67
-            // Example: 60000 / 3.67 = 16348
-            newRates.aed = Math.round(value / 3.67);
-        }
-
-        setLocalRates(newRates);
-        updateExchangeRates(newRates);
-    };
-
     const getTabName = (tab: Tab) => {
         switch(tab) {
             case 'register': return 'ثبت راننده';
@@ -65,9 +50,11 @@ const HeaderContent: React.FC<{
             case 'drivers': return 'لیست رانندگان';
             case 'reports': return 'گزارش‌های مالی';
             case 'companies': return 'مدیریت شرکت‌ها';
+            case 'receivers': return 'مدیریت تحویل‌گیرندگان';
             case 'purchases': return 'خرید از شرکت‌ها';
             case 'partners': return 'مدیریت شرکا';
             case 'expenses': return 'مدیریت هزینه‌ها';
+            case 'exchange': return 'امور صرافی';
             case 'ai-chat': return 'دستیار هوشمند';
             case 'backup': return 'پشتیبان‌گیری';
             default: return '';
@@ -83,36 +70,6 @@ const HeaderContent: React.FC<{
                <h2 className="text-xl font-semibold text-slate-800 whitespace-nowrap">
                  {getTabName(activeTab)}
                </h2>
-             </div>
-
-             {/* Currency Rates Widget */}
-             <div className="flex items-center gap-4 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200 overflow-x-auto">
-                <div className="flex items-center gap-2 text-slate-600">
-                    <Coins size={16} className="text-amber-500" />
-                    <span className="text-xs font-bold">نرخ ارز:</span>
-                </div>
-                <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-500">دلار:</span>
-                    <input 
-                        type="number" 
-                        value={localRates.usd} 
-                        onChange={(e) => handleRateChange('usd', e.target.value)}
-                        className="w-20 text-xs p-1 border border-slate-300 rounded text-center focus:ring-1 focus:ring-blue-500 outline-none" 
-                    />
-                </div>
-                <div className="w-px h-4 bg-slate-300"></div>
-                <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-500">درهم:</span>
-                    <input 
-                        type="number" 
-                        value={localRates.aed} 
-                        onChange={(e) => handleRateChange('aed', e.target.value)}
-                        className="w-20 text-xs p-1 border border-slate-300 rounded text-center focus:ring-1 focus:ring-blue-500 outline-none" 
-                    />
-                </div>
-                <div className="text-[10px] text-slate-400 font-mono pt-1">
-                    (AED = USD / 3.67)
-                </div>
              </div>
 
              <div className="flex items-center gap-3 hidden sm:flex">
@@ -157,9 +114,11 @@ const App: React.FC = () => {
       case 'drivers': return <DriversList />;
       case 'reports': return <FinancialReport />;
       case 'companies': return <CompanyManager />;
+      case 'receivers': return <ReceiverManager />;
       case 'purchases': return <PurchaseEntry />;
       case 'partners': return <PartnerManager />;
       case 'expenses': return <ExpenseManager />;
+      case 'exchange': return <ExchangeManager />; 
       case 'ai-chat': return <AIChat />;
       case 'backup': return <BackupManager />;
       default: return <DriverRegistration />;
@@ -168,73 +127,79 @@ const App: React.FC = () => {
 
   return (
     <DataProvider>
-      <div className="min-h-screen bg-slate-50 flex" dir="rtl">
-        {/* Sidebar for Desktop - Moved to Right */}
-        <aside className="hidden lg:flex flex-col w-64 bg-slate-900 text-slate-300 fixed right-0 h-full z-10 transition-all print:hidden">
-          <div className="p-6 border-b border-slate-800">
-            <h1 className="text-xl font-bold text-white tracking-wide">مدیریت<span className="text-blue-500">صادرات‌گاز</span></h1>
-            <p className="text-xs text-slate-500 mt-1">نسخه ۲.۲.۰ سازمانی</p>
-          </div>
-          <nav className="flex-1 p-4 space-y-2 overflow-y-auto scrollbar-hide">
-            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-2">عملیات</div>
-            <NavItem tab="register" icon={UserPlus} label="ثبت راننده" />
-            <NavItem tab="queue" icon={Truck} label="صف بارگیری" />
-            <NavItem tab="entry" icon={Fuel} label="ورود گاز" />
+      <LicenseGuard>
+        <div className="min-h-screen bg-slate-50 flex" dir="rtl">
+            {/* Sidebar for Desktop - Moved to Right */}
+            <aside className="hidden lg:flex flex-col w-64 bg-slate-900 text-slate-300 fixed right-0 h-full z-10 transition-all print:hidden">
+            <div className="p-6 border-b border-slate-800">
+                <h1 className="text-xl font-bold text-white tracking-wide">مدیریت<span className="text-blue-500">صادرات‌گاز</span></h1>
+                <p className="text-xs text-slate-500 mt-1">نسخه ۲.۵.۰ سازمانی</p>
+            </div>
+            <nav className="flex-1 p-4 space-y-2 overflow-y-auto scrollbar-hide">
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-2">عملیات</div>
+                <NavItem tab="register" icon={UserPlus} label="ثبت راننده" />
+                <NavItem tab="queue" icon={Truck} label="صف بارگیری" />
+                <NavItem tab="entry" icon={Fuel} label="ورود گاز" />
+                
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-6">بازرگانی</div>
+                <NavItem tab="companies" icon={Building2} label="شرکت‌ها" />
+                <NavItem tab="receivers" icon={Container} label="تحویل‌گیرندگان" />
+                <NavItem tab="purchases" icon={ShoppingCart} label="خرید گاز" />
+                <NavItem tab="expenses" icon={Wallet} label="هزینه‌ها جاری" />
+                <NavItem tab="partners" icon={Handshake} label="شرکا و سود" />
+                <NavItem tab="exchange" icon={Landmark} label="امور صرافی" />
+
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-6">داده‌ها و گزارش‌ها</div>
+                <NavItem tab="drivers" icon={Users} label="لیست رانندگان" />
+                <NavItem tab="reports" icon={FileText} label="گزارش‌های مالی" />
+                <NavItem tab="backup" icon={Database} label="پشتیبان‌گیری" />
+
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-6">دستیار</div>
+                <NavItem tab="ai-chat" icon={Bot} label="دستیار هوشمند" />
+            </nav>
+            </aside>
+
+            {/* Mobile Sidebar Overlay */}
+            {sidebarOpen && (
+            <div className="fixed inset-0 bg-black/50 z-20 lg:hidden print:hidden" onClick={() => setSidebarOpen(false)} />
+            )}
             
-            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-6">بازرگانی</div>
-            <NavItem tab="companies" icon={Building2} label="شرکت‌ها" />
-            <NavItem tab="purchases" icon={ShoppingCart} label="خرید گاز" />
-            <NavItem tab="expenses" icon={Wallet} label="هزینه‌ها جاری" />
-            <NavItem tab="partners" icon={Handshake} label="شرکا و سود" />
+            {/* Mobile Sidebar - Moved to Right */}
+            <aside className={`fixed top-0 right-0 w-64 bg-slate-900 text-slate-300 h-full z-30 transform transition-transform duration-300 lg:hidden print:hidden ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+            <div className="p-6 border-b border-slate-800 flex justify-between items-center">
+                <div>
+                    <h1 className="text-xl font-bold text-white">مدیریت‌گاز</h1>
+                </div>
+                <button onClick={() => setSidebarOpen(false)} className="text-slate-400 hover:text-white">
+                <X size={24} />
+                </button>
+            </div>
+            <nav className="p-4 space-y-2 overflow-y-auto max-h-screen pb-20">
+                <NavItem tab="register" icon={UserPlus} label="ثبت راننده" />
+                <NavItem tab="queue" icon={Truck} label="صف بارگیری" />
+                <NavItem tab="entry" icon={Fuel} label="ورود گاز" />
+                <NavItem tab="companies" icon={Building2} label="شرکت‌ها" />
+                <NavItem tab="receivers" icon={Container} label="تحویل‌گیرندگان" />
+                <NavItem tab="purchases" icon={ShoppingCart} label="خرید گاز" />
+                <NavItem tab="expenses" icon={Wallet} label="هزینه‌ها" />
+                <NavItem tab="partners" icon={Handshake} label="شرکا و سود" />
+                <NavItem tab="exchange" icon={Landmark} label="امور صرافی" />
+                <NavItem tab="drivers" icon={Users} label="لیست رانندگان" />
+                <NavItem tab="reports" icon={FileText} label="گزارش‌های مالی" />
+                <NavItem tab="backup" icon={Database} label="پشتیبان‌گیری" />
+                <NavItem tab="ai-chat" icon={Bot} label="دستیار هوشمند" />
+            </nav>
+            </aside>
 
-            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-6">داده‌ها و گزارش‌ها</div>
-            <NavItem tab="drivers" icon={Users} label="لیست رانندگان" />
-            <NavItem tab="reports" icon={FileText} label="گزارش‌های مالی" />
-            <NavItem tab="backup" icon={Database} label="پشتیبان‌گیری" />
-
-            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-6">دستیار</div>
-            <NavItem tab="ai-chat" icon={Bot} label="دستیار هوشمند" />
-          </nav>
-        </aside>
-
-        {/* Mobile Sidebar Overlay */}
-        {sidebarOpen && (
-          <div className="fixed inset-0 bg-black/50 z-20 lg:hidden print:hidden" onClick={() => setSidebarOpen(false)} />
-        )}
-        
-        {/* Mobile Sidebar - Moved to Right */}
-        <aside className={`fixed top-0 right-0 w-64 bg-slate-900 text-slate-300 h-full z-30 transform transition-transform duration-300 lg:hidden print:hidden ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`}>
-           <div className="p-6 border-b border-slate-800 flex justify-between items-center">
-             <div>
-                <h1 className="text-xl font-bold text-white">مدیریت‌گاز</h1>
-             </div>
-             <button onClick={() => setSidebarOpen(false)} className="text-slate-400 hover:text-white">
-               <X size={24} />
-             </button>
-          </div>
-          <nav className="p-4 space-y-2 overflow-y-auto max-h-screen pb-20">
-            <NavItem tab="register" icon={UserPlus} label="ثبت راننده" />
-            <NavItem tab="queue" icon={Truck} label="صف بارگیری" />
-            <NavItem tab="entry" icon={Fuel} label="ورود گاز" />
-            <NavItem tab="companies" icon={Building2} label="شرکت‌ها" />
-            <NavItem tab="purchases" icon={ShoppingCart} label="خرید گاز" />
-            <NavItem tab="expenses" icon={Wallet} label="هزینه‌ها" />
-            <NavItem tab="partners" icon={Handshake} label="شرکا و سود" />
-            <NavItem tab="drivers" icon={Users} label="لیست رانندگان" />
-            <NavItem tab="reports" icon={FileText} label="گزارش‌های مالی" />
-            <NavItem tab="backup" icon={Database} label="پشتیبان‌گیری" />
-            <NavItem tab="ai-chat" icon={Bot} label="دستیار هوشمند" />
-          </nav>
-        </aside>
-
-        {/* Main Content - Adjusted margin for RTL */}
-        <main className="flex-1 lg:mr-64 flex flex-col min-h-screen transition-all print:mr-0">
-            <HeaderContent setSidebarOpen={setSidebarOpen} activeTab={activeTab} />
-          <div className="p-6 flex-1 overflow-x-hidden print:p-0">
-            {renderContent()}
-          </div>
-        </main>
-      </div>
+            {/* Main Content - Adjusted margin for RTL */}
+            <main className="flex-1 lg:mr-64 flex flex-col min-h-screen transition-all print:mr-0">
+                <HeaderContent setSidebarOpen={setSidebarOpen} activeTab={activeTab} />
+            <div className="p-6 flex-1 overflow-x-hidden print:p-0">
+                {renderContent()}
+            </div>
+            </main>
+        </div>
+      </LicenseGuard>
     </DataProvider>
   );
 };
