@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="50%" stop-color="#1e3a8a" />
+      <stop offset="100%" stop-color="#2563eb" />
+    </linearGradient>
+    <linearGradient id="flameGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#f97316" />
+      <stop offset="60%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#fef08a" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+  <circle cx="256" cy="256" r="185" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="6" />
+  <!-- Gas Flame & Tank Emblem -->
+  <path d="M256 96 C256 96 356 196 356 284 C356 342 311 388 256 388 C201 388 156 342 156 284 C156 240 184 196 208 168 C204 204 224 228 240 228 C228 180 256 96 256 96 Z" fill="url(#flameGrad)" />
+  <path d="M256 212 C256 212 304 262 304 306 C304 335 282 358 256 358 C230 358 208 335 208 306 C208 262 256 212 256 212 Z" fill="#38bdf8" opacity="0.9" />
+  <rect x="176" y="406" width="160" height="22" rx="11" fill="#e2e8f0" opacity="0.9" />
+</svg>

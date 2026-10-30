@@ -103,12 +103,10 @@ const BackupManager: React.FC = () => {
         isEncrypted = true;
       }
       
-      // Create current date string for filename (e.g. 1402-05-10)
       const date = new Date().toLocaleDateString('fa-IR').replace(/\//g, '-');
       const prefix = isEncrypted ? 'secure_' : '';
       const fileName = `gas_manager_${prefix}backup_${date}.json`;
 
-      // Helper for legacy download method
       const downloadFallback = () => {
           const blob = new Blob([finalContent], { type: 'application/json' });
           const url = URL.createObjectURL(blob);
@@ -123,7 +121,6 @@ const BackupManager: React.FC = () => {
       };
 
       try {
-        // Check if File System Access API is supported (for "Save As" dialog)
         // @ts-ignore
         if (typeof window.showSaveFilePicker === 'function') {
           // @ts-ignore
@@ -169,8 +166,6 @@ const BackupManager: React.FC = () => {
     reader.onload = async (event) => {
       try {
         const fileContent = event.target?.result as string;
-        
-        // Check if looks like our encrypted format
         let finalDataString = fileContent;
         const tempJson = JSON.parse(fileContent);
 
@@ -193,7 +188,6 @@ const BackupManager: React.FC = () => {
 
         const data = JSON.parse(finalDataString);
         
-        // Basic validation
         if (!data.drivers || !data.transactions) {
           alert('فایل انتخاب شده معتبر نیست یا فرمت آن صحیح نمی‌باشد.');
           return;
@@ -208,7 +202,6 @@ const BackupManager: React.FC = () => {
         alert('خطا در خواندن فایل. لطفا از سالم بودن فایل JSON و صحت رمز عبور اطمینان حاصل کنید.');
       } finally {
         setIsProcessing(false);
-        // Reset input
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
     };
@@ -217,49 +210,49 @@ const BackupManager: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-        <div className="flex items-center gap-3 mb-6 border-b border-slate-100 pb-4">
-          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-600">
+      <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 p-6 transition-colors">
+        <div className="flex items-center gap-3 mb-6 border-b border-slate-100 dark:border-slate-800 pb-4">
+          <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg text-indigo-600 dark:text-indigo-400">
             <Database size={24} />
           </div>
           <div>
-            <h2 className="text-xl font-bold text-slate-800">مدیریت پشتیبان‌گیری</h2>
-            <p className="text-sm text-slate-500">تهیه نسخه پشتیبان و بازیابی اطلاعات سیستم</p>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white">مدیریت پشتیبان‌گیری</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400">تهیه نسخه پشتیبان و بازیابی اطلاعات سیستم</p>
           </div>
         </div>
 
         {/* Encryption Settings */}
-        <div className="mb-8 bg-indigo-50 border border-indigo-100 p-4 rounded-xl">
-            <div className="flex items-center gap-2 mb-3 text-indigo-800 font-bold">
+        <div className="mb-8 bg-indigo-50 dark:bg-indigo-900/10 border border-indigo-100 dark:border-indigo-800/50 p-4 rounded-xl shadow-inner">
+            <div className="flex items-center gap-2 mb-3 text-indigo-800 dark:text-indigo-300 font-bold">
                 <KeyRound size={20} />
                 <h3>تنظیمات امنیتی (اختیاری)</h3>
             </div>
-            <p className="text-xs text-indigo-700 mb-3 leading-relaxed">
+            <p className="text-xs text-indigo-700 dark:text-indigo-400 mb-4 leading-relaxed">
                 برای محافظت از اطلاعات، می‌توانید یک رمز عبور تعیین کنید. 
                 اگر رمز وارد کنید، فایل خروجی <strong>رمزنگاری</strong> می‌شود و برای بازگردانی آن حتماً به همین رمز نیاز خواهید داشت.
             </p>
             <div className="relative">
-                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-indigo-400">
+                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-indigo-400 dark:text-indigo-500">
                     {password ? <Lock size={18} /> : <Unlock size={18} />}
                 </div>
                 <input 
-                    type="text" // Using text to allow user to see the password they are setting for backup
+                    type="text" 
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="رمز عبور برای رمزنگاری / رمزگشایی فایل..."
-                    className="w-full pr-10 pl-4 py-2.5 border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all"
+                    className="w-full pr-10 pl-4 py-3 bg-white dark:bg-slate-800 border border-indigo-200 dark:border-indigo-800 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all text-slate-900 dark:text-white shadow-sm"
                 />
             </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Export Section */}
-          <div className="border border-slate-200 rounded-xl p-6 bg-slate-50 flex flex-col items-center text-center hover:shadow-md transition-shadow">
-            <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 mb-4">
-              <FolderInput size={32} />
+          <div className="border border-slate-200 dark:border-slate-800 rounded-2xl p-8 bg-slate-50 dark:bg-slate-800/30 flex flex-col items-center text-center hover:shadow-md transition-shadow group">
+            <div className="w-20 h-20 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center text-blue-600 dark:text-blue-400 mb-6 group-hover:scale-110 transition-transform">
+              <FolderInput size={40} />
             </div>
-            <h3 className="text-lg font-bold text-slate-800 mb-2">دریافت فایل پشتیبان</h3>
-            <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+            <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-2">دریافت فایل پشتیبان</h3>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-8 leading-relaxed max-w-xs">
               {password 
                 ? 'فایل پشتیبان رمزنگاری شده با رمز عبور وارد شده ایجاد خواهد شد.' 
                 : 'فایل پشتیبان استاندارد (بدون رمز) ایجاد خواهد شد.'}
@@ -267,29 +260,31 @@ const BackupManager: React.FC = () => {
             <button 
               onClick={handleExport}
               disabled={isProcessing}
-              className={`w-full py-3 ${password ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-blue-600 hover:bg-blue-700'} text-white font-bold rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50`}
+              className={`w-full py-4 ${password ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-blue-600 hover:bg-blue-700'} text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-50 shadow-lg active:scale-95`}
             >
               {isProcessing ? (
                 <span className="animate-pulse">در حال پردازش...</span>
               ) : (
                 <>
                    {password ? <Lock size={20} /> : <FileJson size={20} />} 
-                   {password ? 'دانلود فایل رمزنگاری شده' : 'دانلود فایل معمولی'}
+                   {password ? 'دانلود فایل امن (Secure)' : 'دانلود فایل پشتیبان'}
                 </>
               )}
             </button>
           </div>
 
           {/* Import Section */}
-          <div className="border border-slate-200 rounded-xl p-6 bg-slate-50 flex flex-col items-center text-center hover:shadow-md transition-shadow">
-            <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600 mb-4">
-              <Upload size={32} />
+          <div className="border border-slate-200 dark:border-slate-800 rounded-2xl p-8 bg-slate-50 dark:bg-slate-800/30 flex flex-col items-center text-center hover:shadow-md transition-shadow group">
+            <div className="w-20 h-20 bg-emerald-100 dark:bg-emerald-900/30 rounded-full flex items-center justify-center text-emerald-600 dark:text-emerald-400 mb-6 group-hover:scale-110 transition-transform">
+              <Upload size={40} />
             </div>
-            <h3 className="text-lg font-bold text-slate-800 mb-2">بازیابی اطلاعات</h3>
-            <p className="text-sm text-slate-600 mb-6 leading-relaxed">
-              اگر فایل انتخابی رمزنگاری شده باشد، از رمز عبور وارد شده در بالا برای بازگشایی آن استفاده می‌شود.
-              <span className="block mt-1 text-red-500 font-medium text-xs">توجه: اطلاعات فعلی با اطلاعات فایل جایگزین می‌شود.</span>
+            <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-2">بازیابی اطلاعات</h3>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-4 leading-relaxed max-w-xs">
+              فایل انتخاب شده باید معتبر باشد. در صورت رمزنگاری، رمز بالا استفاده می‌شود.
             </p>
+            <div className="bg-rose-50 dark:bg-rose-900/10 text-rose-600 dark:text-rose-400 text-[10px] font-bold p-2 rounded-lg mb-4 border border-rose-100 dark:border-rose-900/30">
+                ⚠️ هشدار: داده‌های فعلی پاک و با فایل جایگزین می‌شوند.
+            </div>
             <input 
               type="file" 
               accept=".json" 
@@ -300,13 +295,13 @@ const BackupManager: React.FC = () => {
             <button 
               onClick={handleImportClick}
               disabled={isProcessing}
-              className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+              className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-50 shadow-lg active:scale-95"
             >
               {isProcessing ? (
                  <span className="animate-pulse">در حال پردازش...</span>
               ) : (
                  <>
-                    <Upload size={20} /> انتخاب فایل پشتیبان
+                    <Upload size={20} /> انتخاب فایل و بازیابی
                  </>
               )}
             </button>
@@ -314,14 +309,14 @@ const BackupManager: React.FC = () => {
         </div>
 
         {/* Security Note */}
-        <div className="mt-6 bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
-             <Shield className="text-amber-600 flex-shrink-0 mt-0.5" size={20} />
+        <div className="mt-8 bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/50 rounded-xl p-4 flex items-start gap-4 transition-colors">
+             <Shield className="text-amber-600 dark:text-amber-500 flex-shrink-0 mt-0.5" size={24} />
              <div>
-                 <h4 className="font-bold text-amber-800 text-sm">نکته امنیتی</h4>
-                 <p className="text-xs text-amber-700 mt-1">
+                 <h4 className="font-bold text-amber-800 dark:text-amber-400 text-sm mb-1">توصیه‌های امنیتی</h4>
+                 <p className="text-xs text-amber-700 dark:text-amber-500/80 leading-relaxed">
                      {password 
-                        ? 'فایل خروجی با الگوریتم AES-GCM رمزنگاری می‌شود. اگر رمز عبور را فراموش کنید، امکان بازیابی فایل وجود نخواهد داشت.'
-                        : 'فایل‌های پشتیبان شامل تمام اطلاعات مالی و شخصی رانندگان هستند. لطفاً این فایل‌ها را در مکان امنی نگهداری کنید.'}
+                        ? 'فایل خروجی با الگوریتم قدرتمند AES-256 رمزنگاری می‌شود. دقت کنید که هیچ راهی برای بازیابی رمز فراموش شده وجود ندارد.'
+                        : 'فایل‌های پشتیبان شامل تمام اسناد مالی، تراکنش‌ها و شماره‌های تماس رانندگان هستند. از اشتراک‌گذاری آن‌ها در شبکه‌های ناامن خودداری کنید.'}
                  </p>
              </div>
         </div>
