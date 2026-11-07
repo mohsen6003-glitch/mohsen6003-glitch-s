@@ -6,8 +6,16 @@ import './index.css';
 import App from './App';
 import { registerSW } from 'virtual:pwa-register';
 
-// Register Service Worker for offline support
-registerSW({ immediate: true });
+// Register Service Worker for offline support in production; clean up stale dev SW in preview
+if (import.meta.env.PROD) {
+  registerSW({ immediate: true });
+} else if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then((registrations) => {
+    for (const registration of registrations) {
+      registration.unregister();
+    }
+  }).catch(() => {});
+}
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

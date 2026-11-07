@@ -49,6 +49,8 @@ import ExchangeManager from './components/ExchangeManager';
 import LicenseGenerator from './components/LicenseGenerator';
 import LiveLoadingDischargeDashboard from './components/LiveLoadingDischargeDashboard';
 import SystemAdminManager from './components/SystemAdminManager';
+import TankerOwnersManager from './components/TankerOwnersManager';
+import TruckOwnersManager from './components/TruckOwnersManager';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
 
@@ -80,12 +82,14 @@ const HeaderContent: React.FC<{
             case 'queue': return 'صف بارگیری';
             case 'entry': return 'ثبت ورود گاز';
             case 'drivers': return 'لیست رانندگان';
+            case 'truck-owners': return 'مدیریت صاحبین کامیون‌ها (واریز کرایه به صاحب کامیون و ثبت برداشت‌ها)';
+            case 'tanker-owners': return 'مدیریت صاحبین تانکرها (تانکرهای بسته شده روی کامیون‌ها)';
             case 'driver-settlements': return 'تنظیم و پرداخت رانندگان (شبا و وزن)';
             case 'driver-expenses': return 'ثبت و مدیریت هزینه‌های راننده و خودرو';
             case 'reports': return 'گزارش‌های مالی';
-            case 'companies': return 'مدیریت شرکت‌ها';
-            case 'receivers': return 'مدیریت تحویل‌گیرندگان';
-            case 'purchases': return 'خرید از شرکت‌ها';
+            case 'companies': return 'مدیریت شرکت‌ها و ثبت بار فرستندگان';
+            case 'receivers': return 'مدیریت تحویل‌گیرندگان (گیرنده بار)';
+            case 'purchases': return 'ثبت بار شرکت‌ها (باسکول بارگیری) و گزارش نرخ‌ها';
             case 'partners': return 'مدیریت شرکا';
             case 'expenses': return 'مدیریت هزینه‌ها';
             case 'exchange': return 'امور صرافی';
@@ -195,6 +199,8 @@ const App: React.FC = () => {
             case 'queue': return <QueueManager />;
             case 'entry': return <TransactionEntry />;
             case 'drivers': return <DriversList />;
+            case 'truck-owners': return <TruckOwnersManager onNavigate={(tab: Tab) => setActiveTab(tab)} />;
+            case 'tanker-owners': return <TankerOwnersManager onNavigate={(tab: Tab) => setActiveTab(tab)} />;
             case 'driver-settlements': return <DriverSettlements />;
             case 'driver-expenses': return <DriverExpensesManager isModal={false} />;
             case 'reports': return <FinancialReport />;
@@ -241,15 +247,17 @@ const App: React.FC = () => {
                     <NavItem tab="entry" icon={Fuel} label="ورود گاز" />
                     
                     <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-6">بازرگانی و مالی</div>
-                    <NavItem tab="companies" icon={Building2} label="شرکت‌ها" />
-                    <NavItem tab="receivers" icon={Container} label="تحویل‌گیرندگان" />
-                    <NavItem tab="purchases" icon={ShoppingCart} label="خرید گاز" />
+                    <NavItem tab="purchases" icon={ShoppingCart} label="ثبت بار شرکت‌ها (باسکول)" />
+                    <NavItem tab="companies" icon={Building2} label="شرکت‌ها و گزارش فرستندگان" />
+                    <NavItem tab="receivers" icon={Container} label="تحویل‌گیرندگان (گیرنده بار)" />
                     <NavItem tab="expenses" icon={Wallet} label="هزینه‌ها جاری" />
                     <NavItem tab="partners" icon={Handshake} label="شرکا و سود" />
                     <NavItem tab="exchange" icon={Landmark} label="امور صرافی" />
 
                     <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-6">گزارشات و رانندگان</div>
                     <NavItem tab="drivers" icon={Users} label="لیست رانندگان" />
+                    <NavItem tab="truck-owners" icon={Truck} label="صاحبین کامیون‌ها (کرایه و برداشت)" />
+                    <NavItem tab="tanker-owners" icon={Container} label="صاحبین تانکرها (روی کامیون)" />
                     <NavItem tab="driver-expenses" icon={Wrench} label="هزینه‌های راننده و ماشین" />
                     <NavItem tab="driver-settlements" icon={CreditCard} label="پرداختی رانندگان (کارت و شبا)" />
                     <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 px-4 mt-6">مدیریت سیستم</div>
@@ -278,14 +286,16 @@ const App: React.FC = () => {
                     <NavItem tab="queue" icon={Truck} label="صف بارگیری" />
                     <NavItem tab="entry" icon={Fuel} label="ورود گاز" />
                     <div className="my-2 border-t border-slate-800"></div>
-                    <NavItem tab="companies" icon={Building2} label="شرکت‌ها" />
-                    <NavItem tab="receivers" icon={Container} label="تحویل‌گیرندگان" />
-                    <NavItem tab="purchases" icon={ShoppingCart} label="خرید گاز" />
+                    <NavItem tab="purchases" icon={ShoppingCart} label="ثبت بار شرکت‌ها (باسکول)" />
+                    <NavItem tab="companies" icon={Building2} label="شرکت‌ها و گزارش فرستندگان" />
+                    <NavItem tab="receivers" icon={Container} label="تحویل‌گیرندگان (گیرنده بار)" />
                     <NavItem tab="expenses" icon={Wallet} label="هزینه‌ها" />
                     <NavItem tab="partners" icon={Handshake} label="شرکا و سود" />
                     <NavItem tab="exchange" icon={Landmark} label="امور صرافی" />
                     <div className="my-2 border-t border-slate-800"></div>
                     <NavItem tab="drivers" icon={Users} label="لیست رانندگان" />
+                    <NavItem tab="truck-owners" icon={Truck} label="صاحبین کامیون‌ها (کرایه و برداشت)" />
+                    <NavItem tab="tanker-owners" icon={Container} label="صاحبین تانکرها (روی کامیون)" />
                     <NavItem tab="driver-expenses" icon={Wrench} label="هزینه‌های راننده و ماشین" />
                     <NavItem tab="driver-settlements" icon={CreditCard} label="پرداختی رانندگان (کارت و شبا)" />
                     <NavItem tab="reports" icon={FileText} label="گزارش‌های مالی" />

@@ -6,7 +6,7 @@ import { DriverPreviousBalanceType } from '../types';
 import { formatNumberInput, cleanNumberInput, numberToPersianWords } from '../utils/numberUtils';
 
 const DriverRegistration: React.FC = () => {
-  const { addDriver } = useData();
+  const { addDriver, tankerOwners, tankerUnits, addTankerUnit, updateTankerUnit, truckOwners, addOwnedTruckUnit } = useData();
   const [form, setForm] = useState({
     fullName: '',
     nationalId: '',
@@ -14,6 +14,14 @@ const DriverRegistration: React.FC = () => {
     phone: '',
     plateNumber: '',
     tankNumber: '',
+    tankerCode: '',
+    isCompanyTanker: true,
+    mountedTankerId: '',
+    tankOwnerId: '',
+    tankOwnerName: '',
+    truckOwnerId: '',
+    truckOwnerName: '',
+    payFreightToTruckOwner: true,
     shebaNumber: '',
     cardNumber: '',
     accountHolderName: '',
@@ -40,13 +48,25 @@ const DriverRegistration: React.FC = () => {
         ? parseFloat(cleanNumberInput(form.previousBalanceAmount)) || 0
         : 0;
 
-    addDriver({
+    const selectedOwner = tankerOwners.find(o => o.id === form.tankOwnerId);
+    const selectedTruckOwner = truckOwners.find(o => o.id === form.truckOwnerId);
+
+    const newDriverId = addDriver({
       fullName: form.fullName,
       nationalId: form.nationalId,
       licenseNo: form.licenseNo,
       phone: form.phone,
       plateNumber: form.plateNumber,
       tankNumber: form.tankNumber,
+      tankerCode: form.tankerCode || undefined,
+      isCompanyTanker: form.isCompanyTanker,
+      mountedTankerId: form.mountedTankerId || undefined,
+      tankOwnerId: form.tankOwnerId || (form.isCompanyTanker && form.tankNumber ? 'COMPANY' : undefined),
+      tankOwnerName: selectedOwner?.fullName || form.tankOwnerName || (form.isCompanyTanker && form.tankNumber ? 'شرکت (تانکر ملکی)' : undefined),
+      truckOwnerId: form.truckOwnerId || undefined,
+      truckOwnerName: selectedTruckOwner?.fullName || form.truckOwnerName || undefined,
+      payFreightToTruckOwner: form.truckOwnerId ? form.payFreightToTruckOwner : undefined,
+      truckOwnerSharePercent: form.truckOwnerId ? 100 : undefined,
       shebaNumber: form.shebaNumber,
       cardNumber: form.cardNumber,
       accountHolderName: form.isAccountHolderDriver ? form.fullName : form.accountHolderName,
@@ -65,6 +85,50 @@ const DriverRegistration: React.FC = () => {
       includePreviousBalanceInTotal: form.includePreviousBalanceInTotal
     });
 
+    if (form.mountedTankerId) {
+      updateTankerUnit(form.mountedTankerId, {
+        status: 'MOUNTED',
+        assignedDriverId: newDriverId,
+        assignedDriverName: form.fullName,
+        assignedTruckPlate: form.plateNumber,
+        mountedDate: new Date().toLocaleDateString('fa-IR')
+      });
+    } else if (form.isCompanyTanker && (form.tankNumber.trim() || form.tankerCode.trim())) {
+      const autoCode = form.tankerCode.trim() || `T-${101 + tankerUnits.length}`;
+      addTankerUnit({
+        ownershipType: 'COMPANY_OWNED',
+        isCompanyOwned: true,
+        ownerId: 'COMPANY',
+        ownerName: 'شرکت (تانکر ملکی)',
+        tankerCode: autoCode,
+        tankNumber: form.tankNumber.trim() || autoCode,
+        capacityTons: 24,
+        tankType: '۴ محور صادراتی LPG',
+        status: 'MOUNTED',
+        assignedDriverId: newDriverId,
+        assignedDriverName: form.fullName,
+        assignedTruckPlate: form.plateNumber,
+        mountedDate: new Date().toLocaleDateString('fa-IR'),
+        contractType: 'COMPANY_OWNED_NONE',
+        autoCalculateFromTruckLoads: true
+      });
+    }
+
+    if (form.truckOwnerId && selectedTruckOwner) {
+      addOwnedTruckUnit({
+        ownerId: selectedTruckOwner.id,
+        ownerName: selectedTruckOwner.fullName,
+        driverId: newDriverId,
+        driverName: form.fullName,
+        plateNumber: form.plateNumber,
+        tankNumber: form.tankNumber,
+        freightMode: 'FULL_TO_OWNER',
+        ownerSharePercentage: 100,
+        depositFreightToOwnerAccount: form.payFreightToTruckOwner,
+        syncBankInfoToDriver: true
+      });
+    }
+
     setForm({ 
       fullName: '', 
       nationalId: '', 
@@ -72,6 +136,14 @@ const DriverRegistration: React.FC = () => {
       phone: '', 
       plateNumber: '', 
       tankNumber: '', 
+      tankerCode: '',
+      isCompanyTanker: true,
+      mountedTankerId: '',
+      tankOwnerId: '',
+      tankOwnerName: '',
+      truckOwnerId: '',
+      truckOwnerName: '',
+      payFreightToTruckOwner: true,
       shebaNumber: '', 
       cardNumber: '',
       accountHolderName: '',
@@ -104,7 +176,7 @@ const DriverRegistration: React.FC = () => {
           <div>
             <h2 className="text-xl font-bold text-slate-800 dark:text-white">ثبت راننده جدید</h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              ثبت مشخصات فردی، اطلاعات بانکی و مانده حساب قبلی راننده
+              ثبت مشخصات فردی، اطلاعات بانکی، صاحب کامیون، تانکر بسته شده و مانده حساب قبلی راننده
             </p>
           </div>
         </div>
@@ -140,13 +212,104 @@ const DriverRegistration: React.FC = () => {
             <input id="phone" name="phone" value={form.phone} onChange={handleChange} className={inputClasses} placeholder="0912..." />
           </div>
           <div>
-            <label htmlFor="plateNumber" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">شماره پلاک</label>
+            <label htmlFor="plateNumber" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">شماره پلاک کامیون (کشنده)</label>
             <input id="plateNumber" name="plateNumber" value={form.plateNumber} onChange={handleChange} className={inputClasses} placeholder="۱۲ الف ۳۴۵ ایران ۶۶" />
           </div>
-          <div>
-            <label htmlFor="tankNumber" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">شماره تانکر</label>
-            <input id="tankNumber" name="tankNumber" value={form.tankNumber} onChange={handleChange} className={inputClasses} placeholder="شناسه تانکر" />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="tankerCode" className="block text-sm font-bold text-indigo-700 dark:text-indigo-300 mb-1">کد مخصوص تانکر</label>
+              <input id="tankerCode" name="tankerCode" value={form.tankerCode} onChange={handleChange} className={`${inputClasses} font-mono font-bold`} placeholder="مثال: T-101" />
+            </div>
+            <div>
+              <label htmlFor="tankNumber" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">شماره مخزن تانکر</label>
+              <input id="tankNumber" name="tankNumber" value={form.tankNumber} onChange={handleChange} className={`${inputClasses} font-mono`} placeholder="شماره مخزن" />
+            </div>
           </div>
+
+          {truckOwners.length > 0 && (
+            <div className="md:col-span-2 p-4 rounded-xl bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800/60 space-y-2">
+              <label className="block text-xs font-black text-blue-900 dark:text-blue-200">
+                انتخاب صاحب کامیون (در صورتی که کامیون متعلق به شخص دیگری است و کرایه به حساب صاحب کامیون واریز می‌شود - اختیاری)
+              </label>
+              <select
+                value={form.truckOwnerId}
+                onChange={(e) => {
+                  const ownerId = e.target.value;
+                  const owner = truckOwners.find(o => o.id === ownerId);
+                  if (owner) {
+                    setForm({
+                      ...form,
+                      truckOwnerId: owner.id,
+                      truckOwnerName: owner.fullName,
+                      payFreightToTruckOwner: true,
+                      isAccountHolderDriver: false,
+                      accountHolderName: owner.accountHolderName || owner.fullName,
+                      cardNumber: owner.cardNumber || form.cardNumber,
+                      shebaNumber: owner.shebaNumber || form.shebaNumber,
+                      bankName: owner.bankName || form.bankName
+                    });
+                  } else {
+                    setForm({
+                      ...form,
+                      truckOwnerId: '',
+                      truckOwnerName: '',
+                      isAccountHolderDriver: true,
+                      accountHolderName: ''
+                    });
+                  }
+                }}
+                className={inputClasses}
+              >
+                <option value="">راننده خودش صاحب کامیون است / عدم انتخاب صاحب کامیون</option>
+                {truckOwners.map(o => (
+                  <option key={o.id} value={o.id}>
+                    صاحب کامیون: {o.fullName} {o.bankName ? `(بانک: ${o.bankName})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {tankerUnits.length > 0 && (
+            <div className="md:col-span-2 p-4 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800/60">
+              <label className="block text-xs font-black text-indigo-900 dark:text-indigo-200 mb-1.5">
+                انتخاب تانکر از لیست ناوگان تانکرهای شرکت یا صاحبین تانکر (اختیاری)
+              </label>
+              <select
+                value={form.mountedTankerId}
+                onChange={(e) => {
+                  const unitId = e.target.value;
+                  const unit = tankerUnits.find(u => u.id === unitId);
+                  if (unit) {
+                    setForm({
+                      ...form,
+                      mountedTankerId: unit.id,
+                      tankerCode: unit.tankerCode || form.tankerCode,
+                      tankNumber: unit.tankNumber,
+                      isCompanyTanker: unit.ownershipType === 'COMPANY_OWNED' || unit.isCompanyOwned || unit.ownerId === 'COMPANY',
+                      tankOwnerId: unit.ownerId,
+                      tankOwnerName: unit.ownerName
+                    });
+                  } else {
+                    setForm({
+                      ...form,
+                      mountedTankerId: '',
+                      tankOwnerId: '',
+                      tankOwnerName: ''
+                    });
+                  }
+                }}
+                className={inputClasses}
+              >
+                <option value="">ثبت تانکر جدید با کد و شماره مخزن بالا (ملکی شرکت) / عدم انتخاب از لیست</option>
+                {tankerUnits.map(u => (
+                  <option key={u.id} value={u.id}>
+                    {u.tankerCode ? `[کد ${u.tankerCode}] ` : ''}مخزن شماره {u.tankNumber} — {u.ownerName} ({u.status === 'MOUNTED' ? `متصل به: ${u.assignedDriverName || 'کامیون'}` : 'آزاد در پارکینگ'})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div>
             <label htmlFor="cardNumber" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">شماره کارت بانکی (۱۶ رقمی)</label>
             <input 

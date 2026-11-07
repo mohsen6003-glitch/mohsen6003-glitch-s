@@ -5,7 +5,7 @@ import {
   History, X, Building2, Pencil, Save, FileText, 
   UserCircle, ArrowLeftRight, TrendingUp, TrendingDown, Search, Container, 
   CreditCard, CheckCircle2, Copy, Check, Share2,
-  ChevronDown, ChevronUp, Scale
+  ChevronDown, ChevronUp, Scale, Wallet, Coins
 } from 'lucide-react';
 import DatePicker, { DateObject } from "react-multi-date-picker";
 import persian from "react-date-object/calendars/persian";
@@ -156,18 +156,52 @@ const numberToPersianWords = (num: number): string => {
   return groups.length > 0 ? `${groups.join(' و ')} تومان` : 'صفر تومان';
 };
 
-// Helper to compute paid and remaining Toman for a transaction
+// Helper to compute paid, overpaid, and remaining Toman + AED delivery status for a transaction
 const getRemittanceSettlementSummary = (t: ExchangeTransaction) => {
-  const isCreditRecord = t.isOpeningBalance && t.openingBalanceType === 'CREDIT_FROM_SARRAF';
+  const isCreditRecord = Boolean(t.isOpeningBalance && t.openingBalanceType === 'CREDIT_FROM_SARRAF');
+  const isAedOnlyOpening = Boolean(t.isOpeningBalance && t.openingBalanceCurrency === 'AED');
+
+  const aedPurchased = t.isOpeningBalance ? 0 : (t.aedAmount || 0);
+  const aedDelivered = t.isOpeningBalance
+    ? 0
+    : (t.aedDeliveredAmount !== undefined ? t.aedDeliveredAmount : (t.actualDeliveredAmount !== undefined ? t.actualDeliveredAmount : (t.aedAmount || 0)));
+  const aedNetDiff = aedPurchased - aedDelivered; // > 0 means we have AED credit with Sarraf, < 0 means we owe AED to Sarraf
+  const aedRemainingWithSarraf = Math.max(0, aedNetDiff);
+  const aedOverdeliveredBySarraf = Math.max(0, -aedNetDiff);
+
+  if (isAedOnlyOpening) {
+    return {
+      payments: [],
+      totalPaid: 0,
+      totalPending: 0,
+      remaining: 0,
+      overpaidToman: 0,
+      progressPercent: 100,
+      isFullySettled: true,
+      isCreditRecord: t.openingBalanceType === 'CREDIT_FROM_SARRAF',
+      isAedOnlyOpening: true,
+      aedPurchased: 0,
+      aedDelivered: 0,
+      aedRemainingWithSarraf: 0,
+      aedOverdeliveredBySarraf: 0
+    };
+  }
+
   if (isCreditRecord) {
     return {
       payments: t.settlementPayments || [],
       totalPaid: t.amountToman || 0,
       totalPending: 0,
       remaining: 0,
+      overpaidToman: t.amountToman || 0,
       progressPercent: 100,
       isFullySettled: true,
-      isCreditRecord: true
+      isCreditRecord: true,
+      isAedOnlyOpening: false,
+      aedPurchased,
+      aedDelivered,
+      aedRemainingWithSarraf,
+      aedOverdeliveredBySarraf
     };
   }
 
@@ -179,30 +213,46 @@ const getRemittanceSettlementSummary = (t: ExchangeTransaction) => {
     const totalPending = payments
       .filter(p => p.status === 'PENDING_PAYMENT')
       .reduce((sum, p) => sum + (p.allocatedAmountToman || 0), 0);
-    const remaining = Math.max(0, (t.amountToman || 0) - totalPaid);
-    const progressPercent = t.amountToman > 0 ? Math.min(100, Math.round((totalPaid / t.amountToman) * 100)) : 0;
-    const isFullySettled = t.amountToman > 0 && remaining === 0;
+    const amountToman = t.amountToman || 0;
+    const remaining = Math.max(0, amountToman - totalPaid);
+    const overpaidToman = Math.max(0, totalPaid - amountToman);
+    const progressPercent = amountToman > 0 ? Math.min(100, Math.round((totalPaid / amountToman) * 100)) : 100;
+    const isFullySettled = amountToman > 0 ? remaining === 0 : true;
     return {
       payments,
       totalPaid,
       totalPending,
       remaining,
+      overpaidToman,
       progressPercent,
       isFullySettled,
-      isCreditRecord: false
+      isCreditRecord: false,
+      isAedOnlyOpening: false,
+      aedPurchased,
+      aedDelivered,
+      aedRemainingWithSarraf,
+      aedOverdeliveredBySarraf
     };
   }
-  const legacyPaid = t.status === 'completed' ? (t.amountToman || 0) : (t.totalPaidToman || 0);
-  const remaining = Math.max(0, (t.amountToman || 0) - legacyPaid);
-  const progressPercent = t.amountToman > 0 ? Math.min(100, Math.round((legacyPaid / t.amountToman) * 100)) : 0;
+  const amountToman = t.amountToman || 0;
+  const legacyPaid = t.status === 'completed' && (t.totalPaidToman === undefined) ? amountToman : (t.totalPaidToman || 0);
+  const remaining = Math.max(0, amountToman - legacyPaid);
+  const overpaidToman = Math.max(0, legacyPaid - amountToman);
+  const progressPercent = amountToman > 0 ? Math.min(100, Math.round((legacyPaid / amountToman) * 100)) : 100;
   return {
     payments: [],
     totalPaid: legacyPaid,
     totalPending: 0,
     remaining,
+    overpaidToman,
     progressPercent,
-    isFullySettled: t.status === 'completed' && remaining === 0,
-    isCreditRecord: false
+    isFullySettled: remaining === 0 && (t.status === 'completed' || legacyPaid >= amountToman),
+    isCreditRecord: false,
+    isAedOnlyOpening: false,
+    aedPurchased,
+    aedDelivered,
+    aedRemainingWithSarraf,
+    aedOverdeliveredBySarraf
   };
 };
 
@@ -229,12 +279,14 @@ const ExchangeManager: React.FC = () => {
   const [quickSarrafPhone, setQuickSarrafPhone] = useState('');
   const [quickOpeningType, setQuickOpeningType] = useState<OpeningBalanceType>('NONE');
   const [quickOpeningToman, setQuickOpeningToman] = useState('');
+  const [quickOpeningAedType, setQuickOpeningAedType] = useState<OpeningBalanceType>('NONE');
+  const [quickOpeningAed, setQuickOpeningAed] = useState('');
 
-  // Modal State: Register / Edit Opening Balance (مانده حساب قبلی صرافی: بدهکاری / بستانکاری)
+  // Modal State: Register / Edit Opening Balance (مانده حساب قبلی صرافی: تفکیک حساب ریالی/تومانی و حساب درهمی)
   const [showOpeningBalanceModal, setShowOpeningBalanceModal] = useState(false);
   const [obExchangeId, setObExchangeId] = useState('');
   const [obType, setObType] = useState<'DEBT_TO_SARRAF' | 'CREDIT_FROM_SARRAF'>('DEBT_TO_SARRAF');
-  const [obInputMode, setObInputMode] = useState<'TOMAN' | 'AED'>('TOMAN');
+  const [obInputMode, setObInputMode] = useState<'TOMAN' | 'AED_CONVERTED' | 'AED_INDEPENDENT'>('TOMAN');
   const [obTomanAmount, setObTomanAmount] = useState('');
   const [obAedAmount, setObAedAmount] = useState('');
   const [obAedRate, setObAedRate] = useState('');
@@ -245,6 +297,8 @@ const ExchangeManager: React.FC = () => {
   // Step 1: New Dirham Purchase / Remittance Form State
   const [selectedExchangeId, setSelectedExchangeId] = useState('');
   const [aedAmountInput, setAedAmountInput] = useState('');
+  const [aedDeliveredInput, setAedDeliveredInput] = useState('');
+  const [isCustomAedDelivered, setIsCustomAedDelivered] = useState(false);
   const [spotAedRateInput, setSpotAedRateInput] = useState('');
   const [spotUsdRateInput, setSpotUsdRateInput] = useState('');
   const [usdAedParityInput, setUsdAedParityInput] = useState('3.67');
@@ -253,6 +307,9 @@ const ExchangeManager: React.FC = () => {
   const [purposeInput, setPurposeInput] = useState('');
   const [descriptionInput, setDescriptionInput] = useState('');
   const [recordDate, setRecordDate] = useState<DateObject | null>(new DateObject({ calendar: persian, locale: persian_fa }));
+
+  // Modal state for editing AED delivered amount on an existing remittance
+  const [editAedDeliveryModal, setEditAedDeliveryModal] = useState<{ tx: ExchangeTransaction; deliveredStr: string } | null>(null);
 
   // Optional initial bank accounts sent by Sarraf during creation
   const [initialAccounts, setInitialAccounts] = useState<ExchangePaymentItem[]>([]);
@@ -300,6 +357,8 @@ const ExchangeManager: React.FC = () => {
     address: '',
     openingBalanceType: 'NONE' as OpeningBalanceType,
     openingBalanceToman: '',
+    openingBalanceAedType: 'NONE' as OpeningBalanceType,
+    openingBalanceAed: '',
     openingBalanceDescription: ''
   });
   const [senderForm, setSenderForm] = useState({ name: '', phone: '' });
@@ -337,6 +396,9 @@ const ExchangeManager: React.FC = () => {
       setObExchangeId(target.id);
       if (target.openingBalanceType && target.openingBalanceType !== 'NONE') {
         setObType(target.openingBalanceType);
+      } else if (target.openingBalanceAedType && target.openingBalanceAedType !== 'NONE') {
+        setObType(target.openingBalanceAedType);
+        setObInputMode('AED_INDEPENDENT');
       } else {
         setObType('DEBT_TO_SARRAF');
       }
@@ -348,7 +410,7 @@ const ExchangeManager: React.FC = () => {
     setShowOpeningBalanceModal(true);
   };
 
-  // Save Opening Balance (مانده حساب قبلی صرافی به صورت بدهکاری یا بستانکاری)
+  // Save Opening Balance (مانده حساب قبلی صرافی به صورت بدهکاری یا بستانکاری ریالی یا درهمی مستقل)
   const handleSaveOpeningBalance = (e: React.FormEvent) => {
     e.preventDefault();
     if (!obExchangeId) {
@@ -358,56 +420,76 @@ const ExchangeManager: React.FC = () => {
 
     const aedNum = parseFloat(obAedAmount) || 0;
     const rateNum = parseFloat(obAedRate) || exchangeRates.aed || 18000;
-    const tomanNum = obInputMode === 'AED'
+    const tomanNum = obInputMode === 'AED_CONVERTED'
       ? Math.round(aedNum * rateNum)
-      : (parseFloat(obTomanAmount) || 0);
+      : obInputMode === 'TOMAN'
+        ? (parseFloat(obTomanAmount) || 0)
+        : 0;
 
-    if (tomanNum <= 0) {
+    if (obInputMode === 'AED_INDEPENDENT') {
+      if (aedNum <= 0) {
+        alert('لطفاً مقدار درهم مانده حساب قبلی را وارد کنید.');
+        return;
+      }
+    } else if (tomanNum <= 0) {
       alert('لطفاً مبلغ مانده حساب قبلی را وارد کنید.');
       return;
     }
 
     const dateStr = obDate ? obDate.format("YYYY/MM/DD HH:mm") : new Date().toLocaleDateString('fa-IR');
     const descStr = obDescription.trim() || (
-      obType === 'DEBT_TO_SARRAF'
-        ? 'مانده بدهکاری از حساب قبلی به صرافی'
-        : 'مانده بستانکاری (طلب ما) از حساب قبلی نزد صرافی'
+      obInputMode === 'AED_INDEPENDENT'
+        ? (obType === 'CREDIT_FROM_SARRAF' ? 'مانده طلب درهمی از قبل نزد صرافی' : 'مانده بدهی درهمی از قبل به صرافی')
+        : (obType === 'DEBT_TO_SARRAF' ? 'مانده بدهکاری ریالی/تومانی از حساب قبلی به صرافی' : 'مانده بستانکاری ریالی/تومانی (طلب ما) از حساب قبلی نزد صرافی')
     );
 
     if (obCreateSettlementRow) {
-      // ثبت به عنوان سند مانده حساب قبلی در لیست حواله‌ها و کاردکس (با قابلیت تسویه از طریق کارت‌های صراف در صورت بدهکاری)
       addExchangeTransaction({
         exchangeId: obExchangeId,
         senderId: senders[0]?.id || 'company',
-        amountToman: tomanNum,
-        aedRate: obInputMode === 'AED' ? rateNum : 0,
-        aedAmount: obInputMode === 'AED' ? aedNum : 0,
-        actualDeliveredAmount: obInputMode === 'AED' ? aedNum : 0,
+        amountToman: obInputMode === 'AED_INDEPENDENT' ? 0 : tomanNum,
+        aedRate: obInputMode === 'AED_CONVERTED' ? rateNum : 0,
+        aedAmount: obInputMode !== 'TOMAN' ? aedNum : 0,
+        actualDeliveredAmount: obInputMode === 'AED_CONVERTED' ? aedNum : 0,
+        aedDeliveredAmount: obInputMode === 'AED_CONVERTED' ? aedNum : 0,
         aedDepositDate: dateStr.split(' ')[0],
         aedDeliveryDate: dateStr.split(' ')[0],
-        receiverName: obType === 'DEBT_TO_SARRAF' ? 'مانده حساب قبلی (بدهکاری به صراف)' : 'مانده حساب قبلی (بستانکاری از صراف)',
-        accountHolder: obType === 'DEBT_TO_SARRAF' ? 'در انتظار تسویه با کارت‌های صراف' : 'بستانکاری از قبل',
+        receiverName: obInputMode === 'AED_INDEPENDENT'
+          ? (obType === 'CREDIT_FROM_SARRAF' ? 'مانده قبلی درهمی (طلب درهم از صراف)' : 'مانده قبلی درهمی (بدهی درهم به صراف)')
+          : (obType === 'DEBT_TO_SARRAF' ? 'مانده حساب قبلی (بدهکاری به صراف)' : 'مانده حساب قبلی (بستانکاری از صراف)'),
+        accountHolder: obInputMode === 'AED_INDEPENDENT'
+          ? 'حساب درهمی مستقل'
+          : (obType === 'DEBT_TO_SARRAF' ? 'در انتظار تسویه با کارت‌های صراف' : 'بستانکاری ریالی از قبل'),
         date: dateStr,
         description: descStr,
-        status: obType === 'CREDIT_FROM_SARRAF' ? 'completed' : 'debt',
+        status: obType === 'CREDIT_FROM_SARRAF' || obInputMode === 'AED_INDEPENDENT' ? 'completed' : 'debt',
         debtor: obType === 'DEBT_TO_SARRAF' ? 'sender' : 'exchange',
-        debtCurrency: 'TOMAN',
+        debtCurrency: obInputMode === 'AED_INDEPENDENT' ? 'AED' : 'TOMAN',
         settlementPayments: [],
         totalPaidToman: 0,
-        remainingToman: obType === 'DEBT_TO_SARRAF' ? tomanNum : 0,
+        remainingToman: obInputMode !== 'AED_INDEPENDENT' && obType === 'DEBT_TO_SARRAF' ? tomanNum : 0,
         isOpeningBalance: true,
-        openingBalanceType: obType
+        openingBalanceType: obType,
+        openingBalanceCurrency: obInputMode === 'AED_INDEPENDENT' ? 'AED' : 'TOMAN'
       });
     } else {
-      // ذخیره مستقیم روی پروفایل صراف
-      updateExchange(obExchangeId, {
-        openingBalanceType: obType,
-        openingBalanceToman: tomanNum,
-        openingBalanceAed: obInputMode === 'AED' ? aedNum : undefined,
-        openingBalanceRate: obInputMode === 'AED' ? rateNum : undefined,
-        openingBalanceDate: dateStr,
-        openingBalanceDescription: descStr
-      });
+      if (obInputMode === 'AED_INDEPENDENT') {
+        updateExchange(obExchangeId, {
+          openingBalanceAedType: obType,
+          openingBalanceAed: aedNum,
+          openingBalanceDate: dateStr,
+          openingBalanceDescription: descStr
+        });
+      } else {
+        updateExchange(obExchangeId, {
+          openingBalanceType: obType,
+          openingBalanceToman: tomanNum,
+          openingBalanceAed: obInputMode === 'AED_CONVERTED' ? aedNum : undefined,
+          openingBalanceRate: obInputMode === 'AED_CONVERTED' ? rateNum : undefined,
+          openingBalanceDate: dateStr,
+          openingBalanceDescription: descStr
+        });
+      }
     }
 
     setShowOpeningBalanceModal(false);
@@ -453,21 +535,26 @@ const ExchangeManager: React.FC = () => {
     e.preventDefault();
     if (!quickSarrafName.trim()) return;
     const openToman = parseFloat(quickOpeningToman) || 0;
+    const openAed = parseFloat(quickOpeningAed) || 0;
     addExchange({
       name: quickSarrafName.trim(),
       phone: quickSarrafPhone.trim() || '-',
       address: 'صرافی طرف قرارداد',
       openingBalanceType: openToman > 0 ? quickOpeningType : 'NONE',
       openingBalanceToman: openToman > 0 ? openToman : 0,
+      openingBalanceAedType: openAed > 0 ? quickOpeningAedType : 'NONE',
+      openingBalanceAed: openAed > 0 ? openAed : 0,
       openingBalanceDate: new DateObject({ calendar: persian, locale: persian_fa }).format("YYYY/MM/DD"),
-      openingBalanceDescription: openToman > 0
-        ? (quickOpeningType === 'DEBT_TO_SARRAF' ? 'مانده بدهکاری از قبل' : 'مانده بستانکاری از قبل')
+      openingBalanceDescription: (openToman > 0 || openAed > 0)
+        ? 'مانده حساب قبلی'
         : undefined
     });
     setQuickSarrafName('');
     setQuickSarrafPhone('');
     setQuickOpeningType('NONE');
     setQuickOpeningToman('');
+    setQuickOpeningAedType('NONE');
+    setQuickOpeningAed('');
     setShowQuickAddSarraf(false);
   };
 
@@ -521,11 +608,14 @@ const ExchangeManager: React.FC = () => {
       return;
     }
     const aedNum = parseFloat(aedAmountInput) || 0;
+    const deliveredAedNum = isCustomAedDelivered
+      ? (parseFloat(aedDeliveredInput) || 0)
+      : aedNum;
     const rateNum = parseFloat(spotAedRateInput) || 0;
     const tomanNum = parseFloat(totalTomanInput) || Math.round(aedNum * rateNum);
 
     if (aedNum <= 0 || rateNum <= 0 || tomanNum <= 0) {
-      alert('لطفاً مقدار درهم دریافتی و نرخ لحظه‌ای درهم را به درستی وارد کنید.');
+      alert('لطفاً مقدار درهم خریداری‌شده و نرخ لحظه‌ای درهم را به درستی وارد کنید.');
       return;
     }
 
@@ -533,6 +623,7 @@ const ExchangeManager: React.FC = () => {
       .filter(a => a.status === 'PAID')
       .reduce((sum, a) => sum + (a.paidAmountToman || a.allocatedAmountToman || 0), 0);
     const remaining = Math.max(0, tomanNum - totalInitialPaid);
+    const overpaid = Math.max(0, totalInitialPaid - tomanNum);
 
     const status: TransactionStatus = remaining === 0
       ? 'completed'
@@ -555,22 +646,26 @@ const ExchangeManager: React.FC = () => {
       aedRate: rateNum,
       usdRateAtTime: parseFloat(spotUsdRateInput) || undefined,
       aedAmount: aedNum,
-      actualDeliveredAmount: aedNum,
+      actualDeliveredAmount: deliveredAedNum,
+      aedDeliveredAmount: deliveredAedNum,
       aedDepositDate: dateFormatted.split(' ')[0],
       aedDeliveryDate: dateFormatted.split(' ')[0],
       receiverName: selectedReceiver?.name || purposeInput.trim() || 'دریافت درهم از صراف',
       accountHolder: accountsSummary,
       date: dateFormatted,
-      description: descriptionInput.trim() || `دریافت ${aedNum.toLocaleString()} درهم با نرخ لحظه‌ای ${rateNum.toLocaleString()} تومان`,
+      description: descriptionInput.trim() || `خرید ${aedNum.toLocaleString()} درهم (تحویل: ${deliveredAedNum.toLocaleString()} درهم) با نرخ ${rateNum.toLocaleString()} تومان`,
       status,
       debtor: remaining > 0 ? 'sender' : undefined,
       debtCurrency: 'TOMAN',
       settlementPayments: initialAccounts,
       totalPaidToman: totalInitialPaid,
-      remainingToman: remaining
+      remainingToman: remaining,
+      overpaidToman: overpaid
     });
 
     setAedAmountInput('');
+    setAedDeliveredInput('');
+    setIsCustomAedDelivered(false);
     setTotalTomanInput('');
     setPurposeInput('');
     setDescriptionInput('');
@@ -579,10 +674,236 @@ const ExchangeManager: React.FC = () => {
     setRecordDate(new DateObject({ calendar: persian, locale: persian_fa }));
   };
 
+  // Save updated AED delivered amount on an existing remittance
+  const handleSaveAedDeliveryUpdate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editAedDeliveryModal) return;
+    const { tx, deliveredStr } = editAedDeliveryModal;
+    const deliveredVal = parseFloat(deliveredStr) || 0;
+    updateExchangeTransaction(tx.id, {
+      actualDeliveredAmount: deliveredVal,
+      aedDeliveredAmount: deliveredVal
+    });
+    setEditAedDeliveryModal(null);
+  };
+
+  // Chronological Dual-Currency & Auto-Offset Engine per Sarraf
+  // Computes automatic Toman credit deduction from overpayments & opening credits onto subsequent remittances
+  const { sarrafSummaries, remittanceAutoOffsetMap } = useMemo(() => {
+    const offsetMap: Record<string, {
+      directPaidToman: number;
+      overpaidToman: number;
+      autoAppliedCreditToman: number;
+      effectiveRemainingToman: number;
+      isEffectivelySettled: boolean;
+      runningTomanBalanceAfterTx: number; // >0 we owe Sarraf, <0 we have credit with Sarraf
+      runningAedBalanceAfterTx: number;   // >0 we have AED credit with Sarraf, <0 we owe AED to Sarraf
+    }> = {};
+
+    const summaries = exchanges.map(ex => {
+      // Chronological transactions for this Sarraf
+      const txs = exchangeTransactions.filter(t => t.exchangeId === ex.id);
+
+      // 1. Opening AED balances (from Exchange profile)
+      let openingCreditAed = ex.openingBalanceAedType === 'CREDIT_FROM_SARRAF' ? (ex.openingBalanceAed || 0) : 0;
+      let openingDebtAed = ex.openingBalanceAedType === 'DEBT_TO_SARRAF' ? (ex.openingBalanceAed || 0) : 0;
+
+      // 2. Opening Toman balances (from Exchange profile)
+      let openingDebitToman = ex.openingBalanceType === 'DEBT_TO_SARRAF' ? (ex.openingBalanceToman || 0) : 0;
+      let openingCreditToman = ex.openingBalanceType === 'CREDIT_FROM_SARRAF' ? (ex.openingBalanceToman || 0) : 0;
+
+      let totalAedPurchased = 0;
+      let totalAedDelivered = 0;
+      let totalDebitToman = openingDebitToman;
+      let totalCreditToman = openingCreditToman;
+      let paidViaCardsToman = 0;
+      let totalOverpaidToman = 0;
+      let totalAutoAppliedCreditToman = 0;
+      let cardsCount = 0;
+
+      // Pool of available Toman credit that can automatically offset unpaid amounts on subsequent remittances
+      // If openingCreditToman > openingDebitToman, start with that net credit pool
+      let availableCreditPoolToman = Math.max(0, openingCreditToman - openingDebitToman);
+      let runningNetDebtToman = openingDebitToman - openingCreditToman; // >0 we owe, <0 we have credit
+      let runningNetCreditAed = openingCreditAed - openingDebtAed;     // >0 we have AED credit, <0 we owe AED
+
+      txs.forEach(t => {
+        const s = getRemittanceSettlementSummary(t);
+        cardsCount += s.payments.length;
+
+        if (t.isOpeningBalance) {
+          if (t.openingBalanceCurrency === 'AED') {
+            const aedVal = t.aedAmount || 0;
+            if (t.openingBalanceType === 'CREDIT_FROM_SARRAF') {
+              openingCreditAed += aedVal;
+              runningNetCreditAed += aedVal;
+            } else {
+              openingDebtAed += aedVal;
+              runningNetCreditAed -= aedVal;
+            }
+            offsetMap[t.id] = {
+              directPaidToman: 0,
+              overpaidToman: 0,
+              autoAppliedCreditToman: 0,
+              effectiveRemainingToman: 0,
+              isEffectivelySettled: true,
+              runningTomanBalanceAfterTx: runningNetDebtToman,
+              runningAedBalanceAfterTx: runningNetCreditAed
+            };
+          } else if (t.openingBalanceType === 'CREDIT_FROM_SARRAF') {
+            const credVal = t.amountToman || 0;
+            openingCreditToman += credVal;
+            totalCreditToman += credVal;
+            availableCreditPoolToman += credVal;
+            runningNetDebtToman -= credVal;
+            offsetMap[t.id] = {
+              directPaidToman: credVal,
+              overpaidToman: credVal,
+              autoAppliedCreditToman: 0,
+              effectiveRemainingToman: 0,
+              isEffectivelySettled: true,
+              runningTomanBalanceAfterTx: runningNetDebtToman,
+              runningAedBalanceAfterTx: runningNetCreditAed
+            };
+          } else {
+            // Opening Toman Debt to Sarraf
+            const debtVal = t.amountToman || 0;
+            openingDebitToman += debtVal;
+            totalDebitToman += debtVal;
+            paidViaCardsToman += s.totalPaid;
+            totalCreditToman += s.totalPaid;
+
+            const rawRemaining = Math.max(0, debtVal - s.totalPaid);
+            const rowOverpaid = Math.max(0, s.totalPaid - debtVal);
+            let autoApplied = 0;
+
+            if (rawRemaining > 0 && availableCreditPoolToman > 0) {
+              autoApplied = Math.min(rawRemaining, availableCreditPoolToman);
+              availableCreditPoolToman -= autoApplied;
+              totalAutoAppliedCreditToman += autoApplied;
+            }
+            if (rowOverpaid > 0) {
+              availableCreditPoolToman += rowOverpaid;
+              totalOverpaidToman += rowOverpaid;
+            }
+
+            const effectiveRem = Math.max(0, rawRemaining - autoApplied);
+            runningNetDebtToman += (debtVal - s.totalPaid);
+
+            offsetMap[t.id] = {
+              directPaidToman: s.totalPaid,
+              overpaidToman: rowOverpaid,
+              autoAppliedCreditToman: autoApplied,
+              effectiveRemainingToman: effectiveRem,
+              isEffectivelySettled: effectiveRem === 0,
+              runningTomanBalanceAfterTx: runningNetDebtToman,
+              runningAedBalanceAfterTx: runningNetCreditAed
+            };
+          }
+        } else {
+          // Standard Remittance
+          totalAedPurchased += s.aedPurchased;
+          totalAedDelivered += s.aedDelivered;
+          runningNetCreditAed += (s.aedPurchased - s.aedDelivered);
+
+          const debtVal = t.amountToman || 0;
+          totalDebitToman += debtVal;
+          paidViaCardsToman += s.totalPaid;
+          totalCreditToman += s.totalPaid;
+
+          const rawRemaining = Math.max(0, debtVal - s.totalPaid);
+          const rowOverpaid = Math.max(0, s.totalPaid - debtVal);
+          let autoApplied = 0;
+
+          if (rawRemaining > 0 && availableCreditPoolToman > 0) {
+            autoApplied = Math.min(rawRemaining, availableCreditPoolToman);
+            availableCreditPoolToman -= autoApplied;
+            totalAutoAppliedCreditToman += autoApplied;
+          }
+          if (rowOverpaid > 0) {
+            availableCreditPoolToman += rowOverpaid;
+            totalOverpaidToman += rowOverpaid;
+          }
+
+          const effectiveRem = Math.max(0, rawRemaining - autoApplied);
+          runningNetDebtToman += (debtVal - s.totalPaid);
+
+          offsetMap[t.id] = {
+            directPaidToman: s.totalPaid,
+            overpaidToman: rowOverpaid,
+            autoAppliedCreditToman: autoApplied,
+            effectiveRemainingToman: effectiveRem,
+            isEffectivelySettled: effectiveRem === 0,
+            runningTomanBalanceAfterTx: runningNetDebtToman,
+            runningAedBalanceAfterTx: runningNetCreditAed
+          };
+        }
+      });
+
+      // Second pass: if a user registered an overpayment on a LATER remittance while an EARLIER remittance still had effectiveRemainingToman > 0,
+      // apply any leftover availableCreditPoolToman to remaining unpaid rows of the same Sarraf so net ledger and row statuses match.
+      if (availableCreditPoolToman > 0) {
+        txs.forEach(t => {
+          const entry = offsetMap[t.id];
+          if (entry && entry.effectiveRemainingToman > 0 && availableCreditPoolToman > 0) {
+            const extraOffset = Math.min(entry.effectiveRemainingToman, availableCreditPoolToman);
+            entry.autoAppliedCreditToman += extraOffset;
+            entry.effectiveRemainingToman -= extraOffset;
+            entry.isEffectivelySettled = entry.effectiveRemainingToman === 0;
+            availableCreditPoolToman -= extraOffset;
+            totalAutoAppliedCreditToman += extraOffset;
+          }
+        });
+      }
+
+      // netBalanceToman > 0 means we owe the Sarraf (بدهکار ریالی به صراف)
+      // netBalanceToman < 0 means we have Toman credit with the Sarraf (بستانکار ریالی از صراف)
+      const netBalanceToman = totalDebitToman - totalCreditToman;
+      const remainingToman = Math.max(0, netBalanceToman);
+      const creditWithSarrafToman = netBalanceToman < 0 ? Math.abs(netBalanceToman) : 0;
+
+      // netAedBalance > 0 means we have AED credit with Sarraf (طلب درهمی ما از صراف)
+      // netAedBalance < 0 means we owe AED to Sarraf (بدهی درهمی ما به صراف)
+      const netAedBalance = (openingCreditAed - openingDebtAed) + (totalAedPurchased - totalAedDelivered);
+      const aedCreditWithSarraf = Math.max(0, netAedBalance);
+      const aedDebtToSarraf = netAedBalance < 0 ? Math.abs(netAedBalance) : 0;
+
+      return {
+        ...ex,
+        txCount: txs.length,
+        totalAed: totalAedPurchased,
+        totalPurchasedAed: totalAedPurchased,
+        totalAedDelivered,
+        totalDeliveredAed: totalAedDelivered,
+        openingCreditAed,
+        openingDebtAed,
+        openingDebitAed: openingDebtAed,
+        netAedBalance,
+        netBalanceAed: netAedBalance,
+        aedCreditWithSarraf,
+        aedDebtToSarraf,
+        totalToman: totalDebitToman,
+        paidToman: paidViaCardsToman,
+        totalOverpaidToman,
+        totalAutoAppliedCreditToman,
+        openingDebitToman,
+        openingCreditToman,
+        netBalanceToman,
+        remainingToman,
+        creditWithSarrafToman,
+        cardsCount
+      };
+    });
+
+    return { sarrafSummaries: summaries, remittanceAutoOffsetMap: offsetMap };
+  }, [exchanges, exchangeTransactions]);
+
   // Open Settlement Account Modal for a specific Remittance
   const handleOpenAddPaymentModal = (tx: ExchangeTransaction, editItem?: ExchangePaymentItem) => {
     setActiveSettlementTxId(tx.id);
     const summary = getRemittanceSettlementSummary(tx);
+    const offsetInfo = remittanceAutoOffsetMap[tx.id];
+    const effectiveRem = offsetInfo ? offsetInfo.effectiveRemainingToman : summary.remaining;
     if (editItem) {
       setEditingPaymentItemId(editItem.id);
       setPayHolderName(editItem.accountHolderName);
@@ -601,7 +922,7 @@ const ExchangeManager: React.FC = () => {
       setPayShebaNumber('');
       setPayAccountNumber('');
       setPayBankName('');
-      setPayAmountToman(summary.remaining > 0 ? summary.remaining.toString() : '');
+      setPayAmountToman(effectiveRem > 0 ? effectiveRem.toString() : '');
       setPayStatus('PAID');
       setPayTrackingCode('');
       setPayNote('');
@@ -674,6 +995,7 @@ const ExchangeManager: React.FC = () => {
       .filter(p => p.status === 'PAID')
       .reduce((sum, p) => sum + (p.paidAmountToman || p.allocatedAmountToman || 0), 0);
     const remaining = Math.max(0, (tx.amountToman || 0) - totalPaid);
+    const overpaid = Math.max(0, totalPaid - (tx.amountToman || 0));
     const newStatus: TransactionStatus = remaining === 0
       ? 'completed'
       : totalPaid > 0
@@ -688,6 +1010,7 @@ const ExchangeManager: React.FC = () => {
       settlementPayments: updatedPayments,
       totalPaidToman: totalPaid,
       remainingToman: remaining,
+      overpaidToman: overpaid,
       status: newStatus,
       accountHolder: accountsSummary || tx.accountHolder
     });
@@ -724,6 +1047,7 @@ const ExchangeManager: React.FC = () => {
       .filter(p => p.status === 'PAID')
       .reduce((sum, p) => sum + (p.paidAmountToman || p.allocatedAmountToman || 0), 0);
     const remaining = Math.max(0, (tx.amountToman || 0) - totalPaid);
+    const overpaid = Math.max(0, totalPaid - (tx.amountToman || 0));
     const newStatus: TransactionStatus = remaining === 0
       ? 'completed'
       : totalPaid > 0
@@ -734,6 +1058,7 @@ const ExchangeManager: React.FC = () => {
       settlementPayments: updatedPayments,
       totalPaidToman: totalPaid,
       remainingToman: remaining,
+      overpaidToman: overpaid,
       status: newStatus
     });
 
@@ -751,6 +1076,7 @@ const ExchangeManager: React.FC = () => {
       .filter(p => p.status === 'PAID')
       .reduce((sum, p) => sum + (p.paidAmountToman || p.allocatedAmountToman || 0), 0);
     const remaining = Math.max(0, (tx.amountToman || 0) - totalPaid);
+    const overpaid = Math.max(0, totalPaid - (tx.amountToman || 0));
     const newStatus: TransactionStatus = remaining === 0
       ? 'completed'
       : totalPaid > 0
@@ -761,14 +1087,17 @@ const ExchangeManager: React.FC = () => {
       settlementPayments: updatedPayments,
       totalPaidToman: totalPaid,
       remainingToman: remaining,
+      overpaidToman: overpaid,
       status: newStatus
     });
   };
 
-  // Copy full WhatsApp settlement report for the Sarraf (e.g. Majid)
+  // Copy full WhatsApp settlement report for the Sarraf (including dual-currency AED & Toman status)
   const handleCopyWhatsAppReportForSarraf = (tx: ExchangeTransaction) => {
     const sarrafName = getExchangeName(tx.exchangeId);
     const summary = getRemittanceSettlementSummary(tx);
+    const offsetInfo = remittanceAutoOffsetMap[tx.id];
+    const sarrafSummary = sarrafSummaries.find(s => s.id === tx.exchangeId);
 
     const paymentsLines = summary.payments.length > 0
       ? summary.payments.map((p, idx) => {
@@ -776,7 +1105,7 @@ const ExchangeManager: React.FC = () => {
           const cardInfo = p.cardNumber ? ` | کارت: ${formatCardDisplay(p.cardNumber)}` : '';
           const shebaInfo = p.shebaNumber ? ` | شبا: ${p.shebaNumber}` : '';
           const trackInfo = p.trackingCode ? ` | کد رهگیری: ${p.trackingCode}` : '';
-          const amt = (p.status === 'PAID' ? p.paidAmountToman : p.allocatedAmountToman).toLocaleString();
+          const amt = ((p.status === 'PAID' ? p.paidAmountToman : p.allocatedAmountToman) || 0).toLocaleString();
           return `${idx + 1}. ${p.accountHolderName} (${p.bankName || 'بانک'}) - مبلغ: ${amt} تومان (${st})${cardInfo}${shebaInfo}${trackInfo}`;
         }).join('\n')
       : 'هنوز واریزی ثبت نشده است.';
@@ -785,19 +1114,50 @@ const ExchangeManager: React.FC = () => {
       ? `📋 صورت‌وضعیت مانده حساب قبلی (${tx.openingBalanceType === 'CREDIT_FROM_SARRAF' ? 'بستانکاری از صراف' : 'بدهکاری به صراف'})`
       : `📋 صورت‌وضعیت تسویه حواله درهم صرافی`;
 
+    const aedStatusLine = !tx.isOpeningBalance && (tx.aedAmount || 0) > 0
+      ? `💵 درهم خریداری‌شده: ${(summary.aedPurchased || 0).toLocaleString()} AED | تحویل‌شده: ${(summary.aedDelivered || 0).toLocaleString()} AED${summary.aedRemainingWithSarraf > 0 ? ` (مانده طلب درهمی ما در این حواله: ${(summary.aedRemainingWithSarraf || 0).toLocaleString()} AED)` : ''}\n💱 نرخ: ${(tx.aedRate || 0).toLocaleString()} تومان\n`
+      : '';
+
+    const overpaidLine = summary.overpaidToman > 0
+      ? `\n➕ اضافه واریزی ما در این حواله (ثبت در بستانکاری ریالی): ${(summary.overpaidToman || 0).toLocaleString()} تومان`
+      : '';
+
+    const autoAppliedLine = offsetInfo && offsetInfo.autoAppliedCreditToman > 0
+      ? `\n🔄 کسر خودکار از محل بستانکاری/اضافه‌واریزی قبلی: ${(offsetInfo.autoAppliedCreditToman || 0).toLocaleString()} تومان`
+      : '';
+
+    const effectiveRem = offsetInfo ? offsetInfo.effectiveRemainingToman : summary.remaining;
+    const isSettled = offsetInfo ? offsetInfo.isEffectivelySettled : summary.isFullySettled;
+
+    const overallLedgerSection = sarrafSummary
+      ? `\n━━━━━━━━━━━━━━\n📊 نمای کلی حساب با «${sarrafName}»:\n• وضعیت حساب درهمی: ${
+          sarrafSummary.netAedBalance > 0
+            ? `${(sarrafSummary.netAedBalance || 0).toLocaleString()} AED طلب درهمی ما نزد صراف`
+            : sarrafSummary.netAedBalance < 0
+              ? `${Math.abs(sarrafSummary.netAedBalance || 0).toLocaleString()} AED بدهی درهمی ما به صراف`
+              : 'تسویه کامل درهمی (۰ AED)'
+        }\n• وضعیت حساب ریالی/تومانی: ${
+          sarrafSummary.netBalanceToman > 0
+            ? `${(sarrafSummary.netBalanceToman || 0).toLocaleString()} تومان بدهکار به صراف`
+            : sarrafSummary.netBalanceToman < 0
+              ? `${Math.abs(sarrafSummary.netBalanceToman || 0).toLocaleString()} تومان بستانکار از صراف (اضافه واریزی / طلب ریالی)`
+              : 'تسویه کامل ریالی (۰ تومان)'
+        }`
+      : '';
+
     const text = `${titleLine}
 👤 صراف: ${sarrafName}
 📅 تاریخ: ${tx.date}
-${tx.aedAmount > 0 ? `💵 مقدار درهم: ${tx.aedAmount.toLocaleString()} درهم (AED) | نرخ: ${tx.aedRate.toLocaleString()} تومان\n` : ''}💰 مبلغ کل: ${tx.amountToman.toLocaleString()} تومان
+${aedStatusLine}💰 مبلغ کل حواله: ${(tx.amountToman || 0).toLocaleString()} تومان
 
 🏦 لیست واریزی‌ها به حساب‌ها/کارت‌های اعلامی شما:
 ${paymentsLines}
 
-✅ مجموع واریزشده: ${summary.totalPaid.toLocaleString()} تومان
-📌 مانده این ردیف: ${summary.remaining.toLocaleString()} تومان (${summary.isFullySettled ? 'تسویه کامل' : 'در حال تسویه'})`;
+✅ مجموع واریزشده در این ردیف: ${(summary.totalPaid || 0).toLocaleString()} تومان${overpaidLine}${autoAppliedLine}
+📌 مانده نهایی این ردیف: ${(effectiveRem || 0).toLocaleString()} تومان (${isSettled ? 'تسویه کامل' : 'در حال تسویه'})${overallLedgerSection}`;
 
     navigator.clipboard.writeText(text);
-    alert(`گزارش کامل تسویه برای ارسال به «${sarrafName}» در حافظه کپی شد.`);
+    alert(`گزارش کامل تسویه و نمای کلی حساب برای ارسال به «${sarrafName}» در حافظه کپی شد.`);
   };
 
   // Filtered Remittances
@@ -808,9 +1168,13 @@ ${paymentsLines}
         if (selectedSarrafFilter !== 'all' && tx.exchangeId !== selectedSarrafFilter) return false;
 
         const summary = getRemittanceSettlementSummary(tx);
-        if (settlementStatusFilter === 'SETTLED' && !summary.isFullySettled) return false;
-        if (settlementStatusFilter === 'UNSETTLED' && summary.isFullySettled) return false;
-        if (settlementStatusFilter === 'PARTIAL' && (summary.isFullySettled || summary.totalPaid === 0)) return false;
+        const offsetInfo = remittanceAutoOffsetMap[tx.id];
+        const isSettled = offsetInfo ? offsetInfo.isEffectivelySettled : summary.isFullySettled;
+        const totalCovered = summary.totalPaid + (offsetInfo?.autoAppliedCreditToman || 0);
+
+        if (settlementStatusFilter === 'SETTLED' && !isSettled) return false;
+        if (settlementStatusFilter === 'UNSETTLED' && isSettled) return false;
+        if (settlementStatusFilter === 'PARTIAL' && (isSettled || totalCovered === 0)) return false;
 
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
@@ -830,69 +1194,14 @@ ${paymentsLines}
         }
         return true;
       });
-  }, [exchangeTransactions, selectedSarrafFilter, settlementStatusFilter, searchQuery, getExchangeName]);
+  }, [exchangeTransactions, selectedSarrafFilter, settlementStatusFilter, searchQuery, getExchangeName, remittanceAutoOffsetMap]);
 
-  // Per-Sarraf Summary including Opening Balance (بدهکاری / بستانکاری قبلی)
-  const sarrafSummaries = useMemo(() => {
-    return exchanges.map(ex => {
-      const txs = exchangeTransactions.filter(t => t.exchangeId === ex.id);
-      let totalAed = 0;
-      let totalDebitToman = 0; // کل بدهی ما به صراف (حواله‌های دریافتی + مانده بدهی قبلی)
-      let totalCreditToman = 0; // کل بستانکاری ما از صراف (واریزی‌ها به کارت‌های صراف + مانده بستانکاری قبلی)
-      let paidViaCardsToman = 0;
-      let openingDebitToman = ex.openingBalanceType === 'DEBT_TO_SARRAF' ? (ex.openingBalanceToman || 0) : 0;
-      let openingCreditToman = ex.openingBalanceType === 'CREDIT_FROM_SARRAF' ? (ex.openingBalanceToman || 0) : 0;
-      let cardsCount = 0;
-
-      totalDebitToman += openingDebitToman;
-      totalCreditToman += openingCreditToman;
-
-      txs.forEach(t => {
-        const s = getRemittanceSettlementSummary(t);
-        if (t.isOpeningBalance) {
-          if (t.openingBalanceType === 'CREDIT_FROM_SARRAF') {
-            openingCreditToman += t.amountToman || 0;
-            totalCreditToman += t.amountToman || 0;
-          } else {
-            openingDebitToman += t.amountToman || 0;
-            totalDebitToman += t.amountToman || 0;
-            paidViaCardsToman += s.totalPaid;
-            totalCreditToman += s.totalPaid;
-          }
-        } else {
-          totalAed += t.aedAmount || 0;
-          totalDebitToman += t.amountToman || 0;
-          paidViaCardsToman += s.totalPaid;
-          totalCreditToman += s.totalPaid;
-        }
-        cardsCount += s.payments.length;
-      });
-
-      // netBalance > 0 means we owe the Sarraf (بدهکار به صراف)
-      // netBalance < 0 means we have credit with the Sarraf (بستانکار از صراف)
-      const netBalanceToman = totalDebitToman - totalCreditToman;
-      const remainingToman = Math.max(0, netBalanceToman);
-      const creditWithSarrafToman = netBalanceToman < 0 ? Math.abs(netBalanceToman) : 0;
-
-      return {
-        ...ex,
-        txCount: txs.length,
-        totalAed,
-        totalToman: totalDebitToman,
-        paidToman: paidViaCardsToman,
-        openingDebitToman,
-        openingCreditToman,
-        netBalanceToman,
-        remainingToman,
-        creditWithSarrafToman,
-        cardsCount
-      };
-    });
-  }, [exchanges, exchangeTransactions]);
-
-  // Global KPI Summary across all Sarrafs & Remittances
+  // Global KPI Summary across all Sarrafs & Remittances (Dual-Currency: AED & Toman)
   const globalStats = useMemo(() => {
-    let totalAedReceived = 0;
+    let totalAedPurchased = 0;
+    let totalAedDelivered = 0;
+    let totalNetAedCreditWithSarrafs = 0;
+    let totalNetAedDebtToSarrafs = 0;
     let totalDebitToman = 0;
     let totalPaidViaCards = 0;
     let totalOpeningCredit = 0;
@@ -901,7 +1210,14 @@ ${paymentsLines}
     let pendingCardsCount = 0;
 
     sarrafSummaries.forEach(s => {
-      totalAedReceived += s.totalAed;
+      totalAedPurchased += s.totalAed;
+      totalAedDelivered += s.totalAedDelivered;
+      if (s.netAedBalance > 0) {
+        totalNetAedCreditWithSarrafs += s.netAedBalance;
+      } else if (s.netAedBalance < 0) {
+        totalNetAedDebtToSarrafs += Math.abs(s.netAedBalance);
+      }
+
       totalDebitToman += s.totalToman;
       totalPaidViaCards += s.paidToman;
       totalOpeningCredit += s.openingCreditToman;
@@ -918,7 +1234,10 @@ ${paymentsLines}
     });
 
     return {
-      totalAedReceived,
+      totalAedReceived: totalAedPurchased,
+      totalAedDelivered,
+      totalNetAedCreditWithSarrafs,
+      totalNetAedDebtToSarrafs,
       totalTomanPayable: totalDebitToman,
       totalTomanPaid: totalPaidViaCards,
       totalOpeningCredit,
@@ -972,12 +1291,15 @@ ${paymentsLines}
     e.preventDefault();
     if (!officeForm.name.trim()) return alert("نام صراف / صرافی الزامی است.");
     const openToman = parseFloat(officeForm.openingBalanceToman) || 0;
+    const openAed = parseFloat(officeForm.openingBalanceAed) || 0;
     addExchange({
       name: officeForm.name.trim(),
       phone: officeForm.phone.trim(),
       address: officeForm.address.trim(),
       openingBalanceType: openToman > 0 ? officeForm.openingBalanceType : 'NONE',
       openingBalanceToman: openToman > 0 ? openToman : 0,
+      openingBalanceAedType: openAed > 0 ? officeForm.openingBalanceAedType : 'NONE',
+      openingBalanceAed: openAed > 0 ? openAed : 0,
       openingBalanceDate: new DateObject({ calendar: persian, locale: persian_fa }).format("YYYY/MM/DD"),
       openingBalanceDescription: officeForm.openingBalanceDescription.trim() || undefined
     });
@@ -987,6 +1309,8 @@ ${paymentsLines}
       address: '',
       openingBalanceType: 'NONE',
       openingBalanceToman: '',
+      openingBalanceAedType: 'NONE',
+      openingBalanceAed: '',
       openingBalanceDescription: ''
     });
   };
@@ -1029,17 +1353,34 @@ ${paymentsLines}
     ? exchangeTransactions.find(t => t.id === activeSettlementTxId) || null
     : null;
 
+  const selectedSarrafSummary = useMemo(
+    () => sarrafSummaries.find(s => s.id === selectedExchangeId) || null,
+    [sarrafSummaries, selectedExchangeId]
+  );
+
   return (
     <div className="space-y-6">
-      {/* Top KPI Summary Cards */}
+      {/* Top KPI Summary Cards (Dual-Currency: Separate AED Ledger & Toman/Rial Ledger) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 print:hidden">
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex items-center justify-between">
           <div>
-            <p className="text-xs font-bold text-slate-500 dark:text-slate-400">مجموع درهم دریافتی از صراف‌ها</p>
-            <div className="text-2xl font-black text-indigo-600 dark:text-indigo-400 font-mono mt-1" dir="ltr">
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400">حساب درهمی کل (خرید و تحویل)</p>
+            <div className="text-xl font-black text-indigo-600 dark:text-indigo-400 font-mono mt-1" dir="ltr">
               {globalStats.totalAedReceived.toLocaleString()} <span className="text-xs font-bold">AED</span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">در {exchangeTransactions.length} سند ثبت‌شده</p>
+            <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[11px]">
+              {globalStats.totalNetAedCreditWithSarrafs > 0 ? (
+                <span className="font-bold text-emerald-600 dark:text-emerald-400" dir="ltr">
+                  +{globalStats.totalNetAedCreditWithSarrafs.toLocaleString()} AED طلب درهمی ما
+                </span>
+              ) : globalStats.totalNetAedDebtToSarrafs > 0 ? (
+                <span className="font-bold text-rose-600 dark:text-rose-400" dir="ltr">
+                  -{globalStats.totalNetAedDebtToSarrafs.toLocaleString()} AED بدهی درهمی
+                </span>
+              ) : (
+                <span className="text-slate-400">تحویل کامل: {globalStats.totalAedDelivered.toLocaleString()} AED</span>
+              )}
+            </div>
           </div>
           <div className="p-3 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 rounded-xl">
             <Landmark size={24} />
@@ -1048,11 +1389,11 @@ ${paymentsLines}
 
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex items-center justify-between">
           <div>
-            <p className="text-xs font-bold text-slate-500 dark:text-slate-400">کل بدهی ایجادی + مانده قبلی</p>
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400">کل ارزش ریالی حواله‌ها + بدهی قبلی</p>
             <div className="text-xl font-black text-slate-800 dark:text-white font-mono mt-1" dir="ltr">
               {globalStats.totalTomanPayable.toLocaleString()} <span className="text-xs font-normal text-slate-400">تومان</span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">مجموع حواله‌ها و بدهی اول دوره</p>
+            <p className="text-[11px] text-slate-400 mt-1">مجموع ارزش حواله‌ها و بدهی اول دوره</p>
           </div>
           <div className="p-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl">
             <Calculator size={24} />
@@ -1061,14 +1402,14 @@ ${paymentsLines}
 
         <div className="bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 rounded-2xl p-4 shadow-sm flex items-center justify-between">
           <div>
-            <p className="text-xs font-bold text-emerald-800 dark:text-emerald-300">واریزی به کارت‌ها + بستانکاری قبلی</p>
+            <p className="text-xs font-bold text-emerald-800 dark:text-emerald-300">واریزی به صراف + بستانکاری ریالی</p>
             <div className="text-xl font-black text-emerald-700 dark:text-emerald-400 font-mono mt-1" dir="ltr">
               {(globalStats.totalTomanPaid + globalStats.totalOpeningCredit).toLocaleString()} <span className="text-xs font-normal">تومان</span>
             </div>
-            <p className="text-[11px] text-emerald-600 dark:text-emerald-500 mt-1">
+            <p className="text-[11px] text-emerald-600 dark:text-emerald-500 font-bold mt-1">
               {globalStats.totalNetCreditFromSarrafs > 0
-                ? `طلب ما از صراف: ${globalStats.totalNetCreditFromSarrafs.toLocaleString()} ت`
-                : 'مجموع پرداختی و بستانکاری ما'}
+                ? `بستانکاری/اضافه واریزی نزد صراف: ${globalStats.totalNetCreditFromSarrafs.toLocaleString()} ت`
+                : 'مجموع پرداختی و بستانکاری ریالی ما'}
             </p>
           </div>
           <div className="p-3 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 rounded-xl">
@@ -1078,14 +1419,14 @@ ${paymentsLines}
 
         <div className="bg-rose-50/70 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800/60 rounded-2xl p-4 shadow-sm flex items-center justify-between">
           <div>
-            <p className="text-xs font-bold text-rose-800 dark:text-rose-300">مانده بدهی خالص به صراف‌ها</p>
+            <p className="text-xs font-bold text-rose-800 dark:text-rose-300">مانده بدهی خالص ریالی به صراف‌ها</p>
             <div className="text-xl font-black text-rose-600 dark:text-rose-400 font-mono mt-1" dir="ltr">
               {globalStats.totalTomanRemaining.toLocaleString()} <span className="text-xs font-normal">تومان</span>
             </div>
             <p className="text-[11px] text-rose-600 dark:text-rose-500 mt-1">
               {globalStats.pendingCardsCount > 0
                 ? `${globalStats.pendingCardsCount} شماره کارت صراف منتظر واریز`
-                : 'قابل تسویه با کارت‌های ارسالی صراف'}
+                : 'پس از کسر خودکار اضافه‌واریزی‌ها'}
             </p>
           </div>
           <div className="p-3 bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400 rounded-xl">
@@ -1149,7 +1490,7 @@ ${paymentsLines}
           </button>
         </div>
 
-        {/* دکمه ثبت مانده حساب قبلی صرافی (بدهکاری / بستانکاری) */}
+        {/* دکمه ثبت مانده حساب قبلی صرافی (تفکیک درهمی و ریالی) */}
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -1157,12 +1498,12 @@ ${paymentsLines}
             className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm transition-all active:scale-95"
           >
             <Scale size={16} />
-            <span>ثبت مانده حساب قبلی صرافی (بدهکاری / بستانکاری)</span>
+            <span>ثبت مانده قبلی صرافی (حساب درهمی / ریالی)</span>
           </button>
         </div>
       </div>
 
-      {/* Quick Sarraf Selector Bar */}
+      {/* Quick Sarraf Selector Bar with Dual-Currency Badges */}
       {exchanges.length > 0 && activeTab === 'remittances' && (
         <div className="flex items-center gap-1.5 flex-wrap print:hidden">
           <span className="text-xs font-bold text-slate-500">فیلتر صراف:</span>
@@ -1179,22 +1520,36 @@ ${paymentsLines}
           {sarrafSummaries.map(s => (
             <button
               key={s.id}
-              onClick={() => setSelectedSarrafFilter(s.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              onClick={() => {
+                setSelectedSarrafFilter(s.id);
+                setSelectedExchangeId(s.id);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
                 selectedSarrafFilter === s.id
                   ? 'bg-indigo-600 text-white shadow-sm'
                   : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800 hover:border-indigo-300'
               }`}
             >
               <span>{s.name}</span>
+              {s.netAedBalance !== 0 && (
+                <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                  selectedSarrafFilter === s.id
+                    ? 'bg-white/20 text-white'
+                    : s.netAedBalance > 0
+                      ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
+                      : 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300'
+                }`} dir="ltr">
+                  {s.netAedBalance > 0 ? `+${s.netAedBalance.toLocaleString()} AED طلب` : `${s.netAedBalance.toLocaleString()} AED بدهی`}
+                </span>
+              )}
               {s.netBalanceToman > 0 && (
                 <span className={`text-[10px] font-mono ${selectedSarrafFilter === s.id ? 'text-indigo-100' : 'text-rose-600 dark:text-rose-400'}`} dir="ltr">
-                  (بدهکار: {(s.netBalanceToman / 1000000).toFixed(1)}M)
+                  (بدهکار: {(s.netBalanceToman / 1000000).toFixed(1)}M ت)
                 </span>
               )}
               {s.netBalanceToman < 0 && (
                 <span className={`text-[10px] font-mono ${selectedSarrafFilter === s.id ? 'text-emerald-100' : 'text-emerald-600 dark:text-emerald-400'}`} dir="ltr">
-                  (بستانکار: {(Math.abs(s.netBalanceToman) / 1000000).toFixed(1)}M)
+                  (بستانکار: {(Math.abs(s.netBalanceToman) / 1000000).toFixed(1)}M ت)
                 </span>
               )}
             </button>
@@ -1214,10 +1569,10 @@ ${paymentsLines}
                 </div>
                 <div>
                   <h3 className="font-bold text-base sm:text-lg text-white">
-                    گام ۱: دریافت درهم از صراف (با نرخ لحظه‌ای)
+                    گام ۱: ثبت حواله درهم صراف و تفکیک حساب درهمی و ریالی
                   </h3>
                   <p className="text-xs text-indigo-100 mt-0.5">
-                    ابتدا مقدار درهم دریافتی از صراف (مثلاً مجید) و نرخ همان لحظه را ثبت کنید؛ سپس شماره حساب‌ها یا کارت‌هایی که صراف می‌فرستد را واریز و تسویه نمایید.
+                    مقدار درهم خریداری‌شده، درهم تحویل‌شده و نرخ لحظه‌ای را ثبت کنید. اضافه واریزی‌ها به صورت خودکار در بستانکاری ریالی صراف ذخیره و از حواله‌های بعدی کسر می‌شود.
                   </p>
                 </div>
               </div>
@@ -1229,7 +1584,7 @@ ${paymentsLines}
                   className="px-3.5 py-2 bg-amber-500/90 hover:bg-amber-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
                 >
                   <Scale size={15} />
-                  <span>ثبت مانده قبلی (بدهکار / بستانکار)</span>
+                  <span>ثبت مانده قبلی (درهمی / ریالی)</span>
                 </button>
                 <button
                   type="button"
@@ -1246,7 +1601,7 @@ ${paymentsLines}
             {showQuickAddSarraf && (
               <form
                 onSubmit={handleQuickAddSarrafSubmit}
-                className="p-4 bg-indigo-50/80 dark:bg-indigo-950/40 border-b border-indigo-200 dark:border-indigo-800/60 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 items-end gap-3"
+                className="p-4 bg-indigo-50/80 dark:bg-indigo-950/40 border-b border-indigo-200 dark:border-indigo-800/60 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 items-end gap-3"
               >
                 <div>
                   <label className="block text-xs font-bold text-indigo-900 dark:text-indigo-300 mb-1">نام صراف / صرافی *</label>
@@ -1271,19 +1626,19 @@ ${paymentsLines}
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-indigo-900 dark:text-indigo-300 mb-1">وضعیت مانده حساب قبلی</label>
+                  <label className="block text-xs font-bold text-indigo-900 dark:text-indigo-300 mb-1">مانده قبلی ریالی</label>
                   <select
                     value={quickOpeningType}
                     onChange={e => setQuickOpeningType(e.target.value as OpeningBalanceType)}
                     className="w-full p-2.5 bg-white dark:bg-slate-900 border border-indigo-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
                   >
-                    <option value="NONE">بدون مانده قبلی (صفر)</option>
-                    <option value="DEBT_TO_SARRAF">بدهکار به صراف (ما بدهکاریم)</option>
-                    <option value="CREDIT_FROM_SARRAF">بستانکار از صراف (ما طلبکاریم)</option>
+                    <option value="NONE">بدون مانده ریالی</option>
+                    <option value="DEBT_TO_SARRAF">بدهکار ریالی به صراف</option>
+                    <option value="CREDIT_FROM_SARRAF">بستانکار ریالی از صراف</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-indigo-900 dark:text-indigo-300 mb-1">مبلغ مانده قبلی (تومان)</label>
+                  <label className="block text-xs font-bold text-indigo-900 dark:text-indigo-300 mb-1">مبلغ مانده ریالی (تومان)</label>
                   <input
                     type="text"
                     inputMode="decimal"
@@ -1295,12 +1650,36 @@ ${paymentsLines}
                     className="w-full p-2.5 bg-white dark:bg-slate-900 border border-indigo-300 dark:border-slate-700 rounded-xl text-sm font-mono font-bold text-slate-900 dark:text-white outline-none disabled:opacity-50 text-left"
                   />
                 </div>
+                <div>
+                  <label className="block text-xs font-bold text-indigo-900 dark:text-indigo-300 mb-1">مانده قبلی درهمی (AED)</label>
+                  <div className="flex gap-1">
+                    <select
+                      value={quickOpeningAedType}
+                      onChange={e => setQuickOpeningAedType(e.target.value as OpeningBalanceType)}
+                      className="w-1/2 p-2.5 bg-white dark:bg-slate-900 border border-indigo-300 dark:border-slate-700 rounded-xl text-[11px] font-bold text-slate-900 dark:text-white outline-none"
+                    >
+                      <option value="NONE">صفر</option>
+                      <option value="CREDIT_FROM_SARRAF">طلب درهم</option>
+                      <option value="DEBT_TO_SARRAF">بدهی درهم</option>
+                    </select>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      dir="ltr"
+                      disabled={quickOpeningAedType === 'NONE'}
+                      value={formatNumberInput(quickOpeningAed)}
+                      onChange={e => setQuickOpeningAed(cleanNumberInput(e.target.value))}
+                      placeholder="AED"
+                      className="w-1/2 p-2.5 bg-white dark:bg-slate-900 border border-indigo-300 dark:border-slate-700 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-white outline-none disabled:opacity-50 text-left"
+                    />
+                  </div>
+                </div>
                 <div className="flex gap-2">
                   <button
                     type="submit"
                     className="flex-1 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm"
                   >
-                    ذخیره صراف
+                    ذخیره
                   </button>
                   <button
                     type="button"
@@ -1314,11 +1693,124 @@ ${paymentsLines}
             )}
 
             <form onSubmit={handleCreateRemittance} className="p-5 sm:p-6 space-y-5">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* LIVE DUAL-CURRENCY SARRAF ACCOUNT OVERVIEW BANNER AT TOP OF FORM */}
+              {selectedSarrafSummary && (() => {
+                const newAedPurchased = parseFloat(aedAmountInput) || 0;
+                const newAedDelivered = isCustomAedDelivered ? (parseFloat(aedDeliveredInput) || 0) : newAedPurchased;
+                const newAedDiff = newAedPurchased - newAedDelivered;
+                const projectedNetAed = selectedSarrafSummary.netAedBalance + newAedDiff;
+
+                const newRemittanceToman = parseFloat(totalTomanInput) || 0;
+                const currentCreditToman = selectedSarrafSummary.creditWithSarrafToman;
+                const autoDeductedFromCredit = Math.min(newRemittanceToman, currentCreditToman);
+                const netPayableForNewRemittance = Math.max(0, newRemittanceToman - autoDeductedFromCredit);
+
+                return (
+                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 dark:border-slate-700 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <Landmark size={18} className="text-indigo-600 dark:text-indigo-400" />
+                        <span className="font-black text-sm text-slate-900 dark:text-white">
+                          نمای کلی وضعیت حساب صراف: «{selectedSarrafSummary.name}» (تفکیک حساب درهمی و ریالی)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setLedgerSarrafId(selectedSarrafSummary.id)}
+                          className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
+                        >
+                          <History size={14} />
+                          <span>مشاهده کاردکس کامل {selectedSarrafSummary.name}</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {/* 1. Independent AED Ledger Box */}
+                      <div className={`p-3.5 rounded-xl border ${
+                        selectedSarrafSummary.netAedBalance > 0
+                          ? 'bg-emerald-50/70 dark:bg-emerald-950/25 border-emerald-200 dark:border-emerald-800/60'
+                          : selectedSarrafSummary.netAedBalance < 0
+                            ? 'bg-rose-50/70 dark:bg-rose-950/25 border-rose-200 dark:border-rose-800/60'
+                            : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700'
+                      }`}>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-slate-600 dark:text-slate-300">۱. وضعیت حساب درهمی نزد {selectedSarrafSummary.name}:</span>
+                          <span className={`text-xs font-black font-mono ${
+                            selectedSarrafSummary.netAedBalance > 0
+                              ? 'text-emerald-700 dark:text-emerald-400'
+                              : selectedSarrafSummary.netAedBalance < 0
+                                ? 'text-rose-600 dark:text-rose-400'
+                                : 'text-slate-600 dark:text-slate-400'
+                          }`} dir="ltr">
+                            {selectedSarrafSummary.netAedBalance > 0
+                              ? `+${selectedSarrafSummary.netAedBalance.toLocaleString()} AED (طلب درهمی ما از صراف)`
+                              : selectedSarrafSummary.netAedBalance < 0
+                                ? `${selectedSarrafSummary.netAedBalance.toLocaleString()} AED (بدهی درهمی ما به صراف)`
+                                : '0 AED (تسویه کامل درهمی)'}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 mt-1.5 gap-2">
+                          <span>کل خرید: {selectedSarrafSummary.totalAed.toLocaleString()} AED | تحویل‌شده: {selectedSarrafSummary.totalAedDelivered.toLocaleString()} AED</span>
+                          {newAedPurchased > 0 && newAedDiff !== 0 && (
+                            <span className="font-bold text-indigo-600 dark:text-indigo-400" dir="ltr">
+                              پس از این حواله: {projectedNetAed > 0 ? `+${projectedNetAed.toLocaleString()} AED طلب` : `${projectedNetAed.toLocaleString()} AED بدهی`}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* 2. Independent Toman / Rial Ledger Box */}
+                      <div className={`p-3.5 rounded-xl border ${
+                        selectedSarrafSummary.netBalanceToman < 0
+                          ? 'bg-blue-50/80 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800/60'
+                          : selectedSarrafSummary.netBalanceToman > 0
+                            ? 'bg-rose-50/70 dark:bg-rose-950/25 border-rose-200 dark:border-rose-800/60'
+                            : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700'
+                      }`}>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-slate-600 dark:text-slate-300">۲. وضعیت حساب ریالی/تومانی با {selectedSarrafSummary.name}:</span>
+                          <span className={`text-xs font-black font-mono ${
+                            selectedSarrafSummary.netBalanceToman < 0
+                              ? 'text-blue-700 dark:text-blue-400'
+                              : selectedSarrafSummary.netBalanceToman > 0
+                                ? 'text-rose-600 dark:text-rose-400'
+                                : 'text-emerald-600 dark:text-emerald-400'
+                          }`} dir="ltr">
+                            {selectedSarrafSummary.netBalanceToman < 0
+                              ? `+${Math.abs(selectedSarrafSummary.netBalanceToman).toLocaleString()} T (بستانکاری / اضافه واریزی ما نزد صراف)`
+                              : selectedSarrafSummary.netBalanceToman > 0
+                                ? `${selectedSarrafSummary.netBalanceToman.toLocaleString()} T (بدهکار ریالی به صراف)`
+                                : '0 T (تسویه کامل ریالی)'}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 mt-1.5 gap-2">
+                          <span>کل بدهی ریالی: {selectedSarrafSummary.totalToman.toLocaleString()} ت | کل واریزی ما: {(selectedSarrafSummary.paidToman + selectedSarrafSummary.openingCreditToman).toLocaleString()} ت</span>
+                        </div>
+
+                        {/* Live Preview of Auto-Deduction of Existing Credit from New Remittance */}
+                        {newRemittanceToman > 0 && currentCreditToman > 0 && (
+                          <div className="mt-2 pt-2 border-t border-blue-200/70 dark:border-blue-800/60 flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <span className="text-blue-800 dark:text-blue-300 font-bold">
+                              کسر خودکار از بستانکاری ریالی قبلی: <strong className="font-mono" dir="ltr">-{autoDeductedFromCredit.toLocaleString()} T</strong>
+                            </span>
+                            <span className="font-black text-slate-900 dark:text-white font-mono" dir="ltr">
+                              مانده قابل واریز این حواله: {netPayableForNewRemittance.toLocaleString()} تومان
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                 {/* انتخاب صراف */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                    انتخاب صراف (تحویل‌دهنده درهم) <span className="text-red-500">*</span>
+                    انتخاب صراف (طرف حساب) <span className="text-red-500">*</span>
                   </label>
                   {exchanges.length === 0 ? (
                     <div className="p-2.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 rounded-xl flex items-center justify-between">
@@ -1348,10 +1840,10 @@ ${paymentsLines}
                   )}
                 </div>
 
-                {/* مقدار درهم دریافتی */}
+                {/* مقدار درهم خریداری شده در حواله */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                    مقدار درهم دریافتی از صراف (AED) <span className="text-red-500">*</span>
+                    مقدار درهم خریداری‌شده (AED) <span className="text-red-500">*</span>
                   </label>
                   <div className="relative">
                     <input
@@ -1363,6 +1855,9 @@ ${paymentsLines}
                       onChange={e => {
                         const cleaned = cleanNumberInput(e.target.value);
                         setAedAmountInput(cleaned);
+                        if (!isCustomAedDelivered) {
+                          setAedDeliveredInput(cleaned);
+                        }
                         recalculateTotalToman(cleaned, spotAedRateInput);
                       }}
                       placeholder="مثال: 50,000"
@@ -1370,6 +1865,65 @@ ${paymentsLines}
                     />
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-black text-indigo-500">AED</span>
                   </div>
+                </div>
+
+                {/* مقدار درهم تحویل شده واقعی (جهت ثبت طلب یا بدهی درهمی) */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                      مقدار درهم تحویل‌شده (AED)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !isCustomAedDelivered;
+                        setIsCustomAedDelivered(next);
+                        if (!next) setAedDeliveredInput(aedAmountInput);
+                      }}
+                      className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline font-bold"
+                    >
+                      {isCustomAedDelivered ? 'برابر با خرید' : 'ثبت تحویل ناقص/متفاوت'}
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      dir="ltr"
+                      value={formatNumberInput(isCustomAedDelivered ? aedDeliveredInput : aedAmountInput)}
+                      onChange={e => {
+                        setIsCustomAedDelivered(true);
+                        setAedDeliveredInput(cleanNumberInput(e.target.value));
+                      }}
+                      placeholder="تحویل‌شده فعلی..."
+                      className={`w-full p-2.5 pl-14 border rounded-xl text-sm font-mono font-black outline-none text-left ${
+                        isCustomAedDelivered
+                          ? 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-400 dark:border-amber-700 text-amber-800 dark:text-amber-300'
+                          : 'bg-slate-50 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                      }`}
+                    />
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">AED</span>
+                  </div>
+                  {(() => {
+                    const bought = parseFloat(aedAmountInput) || 0;
+                    const deliv = isCustomAedDelivered ? (parseFloat(aedDeliveredInput) || 0) : bought;
+                    const diff = bought - deliv;
+                    if (bought > 0 && diff > 0) {
+                      return (
+                        <div className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 mt-1" dir="ltr">
+                          +{diff.toLocaleString()} AED ثبت در طلب درهمی ما نزد صراف
+                        </div>
+                      );
+                    }
+                    if (bought > 0 && diff < 0) {
+                      return (
+                        <div className="text-[10px] font-bold text-rose-600 dark:text-rose-400 mt-1" dir="ltr">
+                          {diff.toLocaleString()} AED ثبت در بدهی درهمی ما به صراف
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
 
                 {/* نرخ لحظه‌ای درهم به تومان */}
@@ -1417,7 +1971,7 @@ ${paymentsLines}
                 {/* مبلغ کل حواله به تومان */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                    مبلغ کل قابل پرداخت به صراف (تومان)
+                    ارزش کل این حواله (تومان)
                   </label>
                   <div className="relative">
                     <input
@@ -1512,7 +2066,7 @@ ${paymentsLines}
                   <div className="flex items-center gap-2">
                     <CreditCard size={18} className="text-indigo-600 dark:text-indigo-400" />
                     <span className="text-xs font-bold text-indigo-950 dark:text-indigo-200">
-                      ثبت شماره کارت‌ها / حساب‌های بانکی ارسالی صراف برای این حواله (می‌توانید بعد از ثبت حواله نیز به مرور اضافه کنید)
+                      ثبت شماره کارت‌ها / حساب‌های بانکی ارسالی صراف برای این حواله (در صورت واریز بیشتر از مبلغ حواله، مازاد به بستانکاری صراف منتقل می‌شود)
                     </span>
                     {initialAccounts.length > 0 && (
                       <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
@@ -1595,12 +2149,13 @@ ${paymentsLines}
                               type="button"
                               onClick={() => {
                                 const allocatedSoFar = initialAccounts.reduce((s, a) => s + a.allocatedAmountToman, 0);
-                                const rem = Math.max(0, (parseFloat(totalTomanInput) || 0) - allocatedSoFar);
+                                const autoCredit = selectedSarrafSummary ? Math.min(parseFloat(totalTomanInput) || 0, selectedSarrafSummary.creditWithSarrafToman) : 0;
+                                const rem = Math.max(0, (parseFloat(totalTomanInput) || 0) - autoCredit - allocatedSoFar);
                                 setInitAllocatedToman(rem.toString());
                               }}
                               className="text-[10px] text-indigo-600 hover:underline font-bold"
                             >
-                              کل مانده حواله
+                              کل مانده قابل پرداخت
                             </button>
                           )}
                         </div>
@@ -1700,7 +2255,7 @@ ${paymentsLines}
                   className="w-full sm:w-auto px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-indigo-500/20 transition-all active:scale-95 flex items-center justify-center gap-2"
                 >
                   <Plus size={18} />
-                  <span>ثبت حواله دریافت درهم از صراف</span>
+                  <span>ثبت حواله درهم صراف</span>
                 </button>
               </div>
             </form>
@@ -1713,7 +2268,7 @@ ${paymentsLines}
               <div className="flex items-center gap-2 w-full md:w-auto">
                 <FileText size={18} className="text-indigo-600 dark:text-indigo-400" />
                 <h3 className="font-bold text-sm sm:text-base text-slate-800 dark:text-white">
-                  گام ۲: لیست حواله‌های درهم، مانده حساب قبلی و تسویه با کارت‌های صراف
+                  گام ۲: جدول حواله‌های صرافی، حساب درهمی و ریالی، اضافه‌واریزی‌ها و کسر خودکار
                 </h3>
               </div>
 
@@ -1784,23 +2339,31 @@ ${paymentsLines}
                 {filteredRemittances.map(tx => {
                   const sarrafName = getExchangeName(tx.exchangeId);
                   const summary = getRemittanceSettlementSummary(tx);
+                  const offsetInfo = remittanceAutoOffsetMap[tx.id];
+                  const sarrafOverall = sarrafSummaries.find(s => s.id === tx.exchangeId);
+                  const effectiveRemaining = offsetInfo ? offsetInfo.effectiveRemainingToman : summary.remaining;
+                  const autoAppliedCredit = offsetInfo ? offsetInfo.autoAppliedCreditToman : 0;
+                  const isEffectivelySettled = offsetInfo ? offsetInfo.isEffectivelySettled : summary.isFullySettled;
+                  const totalCoveredPercent = tx.amountToman > 0
+                    ? Math.min(100, Math.round(((summary.totalPaid + autoAppliedCredit) / tx.amountToman) * 100))
+                    : 100;
 
                   return (
                     <div
                       key={tx.id}
                       className={`bg-white dark:bg-slate-900 rounded-2xl border transition-all shadow-sm overflow-hidden ${
-                        summary.isCreditRecord
+                        summary.isCreditRecord || summary.overpaidToman > 0
                           ? 'border-blue-300 dark:border-blue-800/70'
-                          : summary.isFullySettled
+                          : isEffectivelySettled
                             ? 'border-emerald-200 dark:border-emerald-900/60'
-                            : summary.totalPaid > 0
+                            : (summary.totalPaid + autoAppliedCredit) > 0
                               ? 'border-amber-300 dark:border-amber-800/70'
                               : 'border-rose-200 dark:border-rose-900/60'
                       }`}
                     >
                       {/* Top Bar of Remittance Card */}
                       <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                        <div className="space-y-1.5">
+                        <div className="space-y-2">
                           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                             <span className="font-bold text-base text-slate-900 dark:text-white flex items-center gap-1.5">
                               <Landmark size={17} className="text-indigo-600 dark:text-indigo-400" />
@@ -1811,77 +2374,182 @@ ${paymentsLines}
                             <span>·</span>
                             <span className={tx.isOpeningBalance ? 'font-bold text-amber-600 dark:text-amber-400' : ''}>
                               {tx.isOpeningBalance
-                                ? (tx.openingBalanceType === 'CREDIT_FROM_SARRAF' ? 'سند مانده حساب قبلی (بستانکاری ما از صراف)' : 'سند مانده حساب قبلی (بدهکاری ما به صراف)')
+                                ? (summary.isAedOnlyOpening
+                                    ? (tx.openingBalanceType === 'CREDIT_FROM_SARRAF' ? 'سند مانده قبلی درهمی (طلب درهم ما از صراف)' : 'سند مانده قبلی درهمی (بدهی درهم ما به صراف)')
+                                    : (tx.openingBalanceType === 'CREDIT_FROM_SARRAF' ? 'سند مانده قبلی ریالی (بستانکاری ما از صراف)' : 'سند مانده قبلی ریالی (بدهکاری ما به صراف)'))
                                 : `بابت: ${tx.receiverName || 'دریافت درهم'}`}
                             </span>
                             <span>·</span>
                             <span className={`font-bold ${
                               summary.isCreditRecord
                                 ? 'text-blue-600 dark:text-blue-400'
-                                : summary.isFullySettled
-                                  ? 'text-emerald-600 dark:text-emerald-400'
-                                  : summary.totalPaid > 0
-                                    ? 'text-amber-600 dark:text-amber-400'
-                                    : 'text-rose-600 dark:text-rose-400'
+                                : summary.overpaidToman > 0
+                                  ? 'text-blue-600 dark:text-blue-400'
+                                  : isEffectivelySettled
+                                    ? 'text-emerald-600 dark:text-emerald-400'
+                                    : (summary.totalPaid + autoAppliedCredit) > 0
+                                      ? 'text-amber-600 dark:text-amber-400'
+                                      : 'text-rose-600 dark:text-rose-400'
                             }`}>
-                              {summary.isCreditRecord
-                                ? '✓ بستانکاری ما نزد صراف (کسر از بدهی کل)'
-                                : summary.isFullySettled
-                                  ? '✓ تسویه کامل شده'
-                                  : summary.totalPaid > 0
-                                    ? `در حال تسویه (${summary.progressPercent}% پرداخت‌شده)`
-                                    : 'بدهکار به صراف (در انتظار واریز به کارت‌های صراف)'}
+                              {summary.isAedOnlyOpening
+                                ? (tx.openingBalanceType === 'CREDIT_FROM_SARRAF' ? `✓ ثبت در طلب درهمی ما (+${(tx.aedAmount || 0).toLocaleString()} AED)` : `ثبت در بدهی درهمی به صراف (-${(tx.aedAmount || 0).toLocaleString()} AED)`)
+                                : summary.isCreditRecord
+                                  ? '✓ بستانکاری ریالی ما نزد صراف (کسر خودکار از حواله‌های بعدی)'
+                                  : summary.overpaidToman > 0
+                                    ? `✓ تسویه کامل + ${(summary.overpaidToman || 0).toLocaleString()} تومان اضافه واریزی (بستانکار از صراف)`
+                                    : isEffectivelySettled
+                                      ? (autoAppliedCredit > 0 ? '✓ تسویه کامل (با کسر خودکار از بستانکاری قبلی)' : '✓ تسویه کامل شده')
+                                      : (summary.totalPaid + autoAppliedCredit) > 0
+                                        ? `در حال تسویه (${totalCoveredPercent}% پوشش داده‌شده)`
+                                        : 'بدهکار به صراف (در انتظار واریز به کارت‌های صراف)'}
                             </span>
                           </div>
+
+                          {/* Overall Sarraf Dual-Currency Mini Status Strip */}
+                          {sarrafOverall && (
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] bg-slate-100/80 dark:bg-slate-800/80 px-3 py-1.5 rounded-lg w-fit">
+                              <span className="font-bold text-slate-600 dark:text-slate-300">نمای کلی حساب «{sarrafName}»:</span>
+                              <span className={`font-mono font-bold ${
+                                sarrafOverall.netAedBalance > 0
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : sarrafOverall.netAedBalance < 0
+                                    ? 'text-rose-600 dark:text-rose-400'
+                                    : 'text-slate-500'
+                              }`} dir="ltr">
+                                درهمی: {sarrafOverall.netAedBalance > 0
+                                  ? `+${(sarrafOverall.netAedBalance || 0).toLocaleString()} AED (طلب ما)`
+                                  : sarrafOverall.netAedBalance < 0
+                                    ? `${(sarrafOverall.netAedBalance || 0).toLocaleString()} AED (بدهی ما)`
+                                    : '۰ AED (تسویه)'}
+                              </span>
+                              <span className="text-slate-300 dark:text-slate-600">|</span>
+                              <span className={`font-mono font-bold ${
+                                sarrafOverall.netBalanceToman < 0
+                                  ? 'text-blue-600 dark:text-blue-400'
+                                  : sarrafOverall.netBalanceToman > 0
+                                    ? 'text-rose-600 dark:text-rose-400'
+                                    : 'text-emerald-600 dark:text-emerald-400'
+                              }`} dir="ltr">
+                                ریالی: {sarrafOverall.netBalanceToman < 0
+                                  ? `+${Math.abs(sarrafOverall.netBalanceToman || 0).toLocaleString()} T (بستانکاریم / اضافه واریزی)`
+                                  : sarrafOverall.netBalanceToman > 0
+                                    ? `${(sarrafOverall.netBalanceToman || 0).toLocaleString()} T (بدهکاریم)`
+                                    : '۰ T (تسویه کامل)'}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* AED Delivery Status & Quick Update Button */}
+                          {!tx.isOpeningBalance && (tx.aedAmount || 0) > 0 && (
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                              <span className="text-slate-600 dark:text-slate-300">
+                                تحویل درهم این حواله: <strong className="font-mono" dir="ltr">{(summary.aedDelivered || 0).toLocaleString()} / {(summary.aedPurchased || 0).toLocaleString()} AED</strong>
+                              </span>
+                              {summary.aedRemainingWithSarraf > 0 && (
+                                <span className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold text-[11px]" dir="ltr">
+                                  +{(summary.aedRemainingWithSarraf || 0).toLocaleString()} AED طلب درهمی ما از صراف در این حواله
+                                </span>
+                              )}
+                              {summary.aedOverdeliveredBySarraf > 0 && (
+                                <span className="px-2 py-0.5 rounded bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 font-bold text-[11px]" dir="ltr">
+                                  -{(summary.aedOverdeliveredBySarraf || 0).toLocaleString()} AED بدهی درهمی ما به صراف در این حواله
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setEditAedDeliveryModal({ tx, deliveredStr: (summary.aedDelivered || 0).toString() })}
+                                className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 print:hidden"
+                              >
+                                <Pencil size={12} />
+                                <span>ویرایش مقدار درهم تحویل‌شده</span>
+                              </button>
+                            </div>
+                          )}
+
                           {tx.description && (
                             <p className="text-xs text-slate-500 dark:text-slate-400">{tx.description}</p>
                           )}
                         </div>
 
                         {/* Key Financial Numbers of this Remittance */}
-                        <div className="flex flex-wrap items-center gap-3 sm:gap-5 bg-slate-50 dark:bg-slate-800/60 px-4 py-2.5 rounded-xl border border-slate-200/70 dark:border-slate-700">
-                          {tx.aedAmount > 0 && (
+                        <div className="flex flex-wrap items-center gap-3 sm:gap-4 bg-slate-50 dark:bg-slate-800/60 px-4 py-2.5 rounded-xl border border-slate-200/70 dark:border-slate-700">
+                          {(tx.aedAmount || 0) > 0 && (
                             <>
                               <div>
-                                <div className="text-[10px] text-slate-400 font-bold">مقدار درهم</div>
+                                <div className="text-[10px] text-slate-400 font-bold">درهم خریداری‌شده</div>
                                 <div className="font-mono font-black text-sm sm:text-base text-indigo-600 dark:text-indigo-400" dir="ltr">
-                                  {tx.aedAmount.toLocaleString()} AED
+                                  {(tx.aedAmount || 0).toLocaleString()} AED
                                 </div>
                               </div>
-                              <div className="w-px h-7 bg-slate-200 dark:bg-slate-700" />
-                              <div>
-                                <div className="text-[10px] text-slate-400 font-bold">نرخ درهم</div>
-                                <div className="font-mono font-bold text-sm text-slate-700 dark:text-slate-200" dir="ltr">
-                                  {tx.aedRate.toLocaleString()} T
-                                </div>
-                              </div>
-                              <div className="w-px h-7 bg-slate-200 dark:bg-slate-700" />
+                              {(tx.aedRate || 0) > 0 && (
+                                <>
+                                  <div className="w-px h-7 bg-slate-200 dark:bg-slate-700" />
+                                  <div>
+                                    <div className="text-[10px] text-slate-400 font-bold">نرخ درهم</div>
+                                    <div className="font-mono font-bold text-sm text-slate-700 dark:text-slate-200" dir="ltr">
+                                      {(tx.aedRate || 0).toLocaleString()} T
+                                    </div>
+                                  </div>
+                                </>
+                              )}
+                              {!summary.isAedOnlyOpening && <div className="w-px h-7 bg-slate-200 dark:bg-slate-700" />}
                             </>
                           )}
-                          <div>
-                            <div className="text-[10px] text-slate-400 font-bold">
-                              {summary.isCreditRecord ? 'مبلغ بستانکاری ما' : tx.isOpeningBalance ? 'مبلغ بدهی قبلی' : 'مبلغ کل حواله'}
-                            </div>
-                            <div className="font-mono font-black text-sm sm:text-base text-slate-900 dark:text-white" dir="ltr">
-                              {tx.amountToman.toLocaleString()} T
-                            </div>
-                          </div>
-                          {!summary.isCreditRecord && (
+                          {!summary.isAedOnlyOpening && (
                             <>
-                              <div className="w-px h-7 bg-slate-200 dark:bg-slate-700" />
                               <div>
-                                <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">پرداخت‌شده</div>
-                                <div className="font-mono font-black text-sm sm:text-base text-emerald-600 dark:text-emerald-400" dir="ltr">
-                                  {summary.totalPaid.toLocaleString()} T
+                                <div className="text-[10px] text-slate-400 font-bold">
+                                  {summary.isCreditRecord ? 'مبلغ بستانکاری ما' : tx.isOpeningBalance ? 'مبلغ بدهی قبلی' : 'مبلغ کل حواله'}
+                                </div>
+                                <div className="font-mono font-black text-sm sm:text-base text-slate-900 dark:text-white" dir="ltr">
+                                  {(tx.amountToman || 0).toLocaleString()} T
                                 </div>
                               </div>
-                              <div className="w-px h-7 bg-slate-200 dark:bg-slate-700" />
-                              <div>
-                                <div className="text-[10px] text-rose-600 dark:text-rose-400 font-bold">مانده تسویه</div>
-                                <div className={`font-mono font-black text-sm sm:text-base ${summary.remaining === 0 ? 'text-emerald-600' : 'text-rose-600 dark:text-rose-400'}`} dir="ltr">
-                                  {summary.remaining.toLocaleString()} T
-                                </div>
-                              </div>
+                              {!summary.isCreditRecord && (
+                                <>
+                                  <div className="w-px h-7 bg-slate-200 dark:bg-slate-700" />
+                                  <div>
+                                    <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">واریزی کارت‌ها</div>
+                                    <div className="font-mono font-black text-sm sm:text-base text-emerald-600 dark:text-emerald-400" dir="ltr">
+                                      {(summary.totalPaid || 0).toLocaleString()} T
+                                    </div>
+                                  </div>
+
+                                  {autoAppliedCredit > 0 && (
+                                    <>
+                                      <div className="w-px h-7 bg-slate-200 dark:bg-slate-700" />
+                                      <div>
+                                        <div className="text-[10px] text-blue-600 dark:text-blue-400 font-bold">کسر از بستانکاری قبلی</div>
+                                        <div className="font-mono font-black text-sm sm:text-base text-blue-600 dark:text-blue-400" dir="ltr">
+                                          {(autoAppliedCredit || 0).toLocaleString()} T
+                                        </div>
+                                      </div>
+                                    </>
+                                  )}
+
+                                  {summary.overpaidToman > 0 ? (
+                                    <>
+                                      <div className="w-px h-7 bg-slate-200 dark:bg-slate-700" />
+                                      <div>
+                                        <div className="text-[10px] text-blue-600 dark:text-blue-400 font-bold">اضافه واریزی (بستانکاری)</div>
+                                        <div className="font-mono font-black text-sm sm:text-base text-blue-600 dark:text-blue-400" dir="ltr">
+                                          +{(summary.overpaidToman || 0).toLocaleString()} T
+                                        </div>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <div className="w-px h-7 bg-slate-200 dark:bg-slate-700" />
+                                      <div>
+                                        <div className="text-[10px] text-rose-600 dark:text-rose-400 font-bold">مانده نهایی</div>
+                                        <div className={`font-mono font-black text-sm sm:text-base ${effectiveRemaining === 0 ? 'text-emerald-600' : 'text-rose-600 dark:text-rose-400'}`} dir="ltr">
+                                          {(effectiveRemaining || 0).toLocaleString()} T
+                                        </div>
+                                      </div>
+                                    </>
+                                  )}
+                                </>
+                              )}
                             </>
                           )}
                         </div>
@@ -1891,30 +2559,54 @@ ${paymentsLines}
                       <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 overflow-hidden">
                         <div
                           className={`h-full transition-all duration-300 ${
-                            summary.isCreditRecord
+                            summary.isCreditRecord || summary.overpaidToman > 0
                               ? 'bg-blue-500'
-                              : summary.isFullySettled
+                              : isEffectivelySettled
                                 ? 'bg-emerald-500'
                                 : 'bg-indigo-600'
                           }`}
-                          style={{ width: `${summary.progressPercent}%` }}
+                          style={{ width: `${totalCoveredPercent}%` }}
                         />
                       </div>
 
                       {/* Bank Accounts / Cards Sent by Sarraf for this Remittance */}
                       <div className="p-4 sm:p-5 space-y-3 bg-slate-50/40 dark:bg-slate-900/40">
+                        {/* Callout Banner for Overpayment or Auto-Applied Credit */}
+                        {!summary.isCreditRecord && !summary.isAedOnlyOpening && (summary.overpaidToman > 0 || autoAppliedCredit > 0) && (
+                          <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-blue-50/80 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/60 text-xs">
+                            {summary.overpaidToman > 0 && (
+                              <div className="text-blue-800 dark:text-blue-300 font-bold flex items-center gap-1.5">
+                                <TrendingUp size={15} className="text-blue-600" />
+                                <span>
+                                  در این حواله مبلغ <strong className="font-mono" dir="ltr">{summary.overpaidToman.toLocaleString()} تومان</strong> بیشتر از ارزش حواله به حساب‌های «{sarrafName}» واریز شده که در بستانکاری ریالی صراف ثبت و به صورت خودکار از بدهی حواله‌های بعدی کسر می‌گردد.
+                                </span>
+                              </div>
+                            )}
+                            {autoAppliedCredit > 0 && (
+                              <div className="text-indigo-800 dark:text-indigo-300 font-bold flex items-center gap-1.5">
+                                <CheckCircle2 size={15} className="text-indigo-600" />
+                                <span>
+                                  مبلغ <strong className="font-mono" dir="ltr">{autoAppliedCredit.toLocaleString()} تومان</strong> از محل بستانکاری/اضافه‌واریزی قبلی نزد «{sarrafName}» به صورت خودکار از بدهی این حواله کسر شد.
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                           <div className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
                             <CreditCard size={15} className="text-indigo-600 dark:text-indigo-400" />
                             <span>
-                              {summary.isCreditRecord
-                                ? `این سند به عنوان بستانکاری قبلی ما از «${sarrafName}» ثبت شده و از بدهی کل ما به این صراف کسر شده است.`
-                                : `شماره حساب‌ها و کارت‌های بانکی معرفی‌شده توسط «${sarrafName}» جهت تسویه (${summary.payments.length} مورد):`}
+                              {summary.isAedOnlyOpening
+                                ? `این سند مربوط به مانده حساب درهمی مستقل با «${sarrafName}» است.`
+                                : summary.isCreditRecord
+                                  ? `این سند به عنوان بستانکاری ریالی قبلی ما از «${sarrafName}» ثبت شده و به صورت خودکار از بدهی حواله‌ها کسر می‌شود.`
+                                  : `شماره حساب‌ها و کارت‌های بانکی معرفی‌شده توسط «${sarrafName}» جهت تسویه (${summary.payments.length} مورد):`}
                             </span>
                           </div>
 
                           <div className="flex flex-wrap items-center gap-2 print:hidden">
-                            {!summary.isCreditRecord && (
+                            {!summary.isCreditRecord && !summary.isAedOnlyOpening && (
                               <button
                                 type="button"
                                 onClick={() => handleOpenAddPaymentModal(tx)}
@@ -1959,16 +2651,20 @@ ${paymentsLines}
                           </div>
                         </div>
 
-                        {!summary.isCreditRecord && (
+                        {!summary.isCreditRecord && !summary.isAedOnlyOpening && (
                           summary.payments.length === 0 ? (
                             <div className="p-4 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-center text-xs text-slate-500 dark:text-slate-400 flex flex-col sm:flex-row items-center justify-center gap-2">
-                              <span>هنوز شماره کارت یا حسابی از طرف «{sarrafName}» برای تسویه این مورد ثبت نشده است.</span>
+                              <span>
+                                {effectiveRemaining === 0 && autoAppliedCredit > 0
+                                  ? `کل مبلغ این حواله از محل بستانکاری قبلی شما نزد «${sarrafName}» تسویه شده است.`
+                                  : `هنوز شماره کارت یا حسابی از طرف «${sarrafName}» برای تسویه این مورد ثبت نشده است.`}
+                              </span>
                               <button
                                 type="button"
                                 onClick={() => handleOpenAddPaymentModal(tx)}
                                 className="text-indigo-600 dark:text-indigo-400 font-bold hover:underline"
                               >
-                                + ثبت اولین کارت / حساب ارسالی صراف
+                                + ثبت کارت / واریزی به حساب صراف
                               </button>
                             </div>
                           ) : (
@@ -2039,7 +2735,7 @@ ${paymentsLines}
                                         </div>
                                       </td>
                                       <td className="px-3 py-2.5 text-center font-mono font-black text-slate-900 dark:text-white" dir="ltr">
-                                        {(p.status === 'PAID' ? p.paidAmountToman : p.allocatedAmountToman).toLocaleString()}
+                                        {((p.status === 'PAID' ? p.paidAmountToman : p.allocatedAmountToman) || 0).toLocaleString()}
                                       </td>
                                       <td className="px-3 py-2.5 text-center font-mono text-[11px] text-slate-500">
                                         {p.trackingCode ? <div>کد: {p.trackingCode}</div> : <div>-</div>}
@@ -2160,10 +2856,10 @@ ${paymentsLines}
                         {row.payment.shebaNumber && <div className="text-[11px] text-slate-500">{row.payment.shebaNumber}</div>}
                       </td>
                       <td className="px-4 py-3 text-center font-mono font-black text-slate-900 dark:text-white" dir="ltr">
-                        {(row.payment.paidAmountToman || row.payment.allocatedAmountToman).toLocaleString()}
+                        {((row.payment.paidAmountToman || row.payment.allocatedAmountToman) || 0).toLocaleString()}
                       </td>
                       <td className="px-4 py-3 text-center font-mono text-slate-600 dark:text-slate-400" dir="ltr">
-                        {row.aedAmount > 0 ? `${row.aedAmount.toLocaleString()} AED (@ ${row.aedRate.toLocaleString()})` : 'مانده حساب قبلی'}
+                        {(row.aedAmount || 0) > 0 ? `${(row.aedAmount || 0).toLocaleString()} AED (@ ${(row.aedRate || 0).toLocaleString()})` : 'مانده حساب قبلی'}
                       </td>
                       <td className="px-4 py-3 text-center font-mono text-slate-500">
                         <div>{row.payment.trackingCode || '-'}</div>
@@ -2185,13 +2881,13 @@ ${paymentsLines}
         </div>
       )}
 
-      {/* TAB 3: SARRAFS DIRECTORY & LEDGER (کاردکس صراف‌ها + ثبت مانده حساب قبلی) */}
+      {/* TAB 3: SARRAFS DIRECTORY & LEDGER (کاردکس صراف‌ها + تفکیک حساب درهمی و ریالی) */}
       {activeTab === 'offices' && (
         <div className="space-y-6 animate-in fade-in">
           <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 p-6">
             <h3 className="text-base font-bold mb-4 flex items-center gap-2 text-slate-800 dark:text-white">
               <Building2 className="text-indigo-600" size={20} />
-              <span>تعریف صراف / صرافی جدید به همراه مانده حساب قبلی (بدهکاری / بستانکاری)</span>
+              <span>تعریف صراف / صرافی جدید به همراه مانده حساب قبلی (تفکیک حساب درهمی و ریالی)</span>
             </h3>
             <form onSubmit={handleOfficeSubmit} className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -2224,49 +2920,85 @@ ${paymentsLines}
                 </div>
               </div>
 
-              <div className="p-4 bg-amber-50/60 dark:bg-amber-950/20 rounded-xl border border-amber-200 dark:border-amber-800/60 grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-                <div>
-                  <label className="block text-xs font-bold text-amber-900 dark:text-amber-300 mb-1">وضعیت مانده حساب قبلی صرافی</label>
-                  <select
-                    value={officeForm.openingBalanceType}
-                    onChange={e => setOfficeForm({ ...officeForm, openingBalanceType: e.target.value as OpeningBalanceType })}
-                    className="w-full p-2.5 bg-white dark:bg-slate-900 border border-amber-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
-                  >
-                    <option value="NONE">بدون مانده قبلی (حساب صفر)</option>
-                    <option value="DEBT_TO_SARRAF">بدهکاری به صرافی (ما به صراف بدهکاریم)</option>
-                    <option value="CREDIT_FROM_SARRAF">بستانکاری از صرافی (ما از صراف طلبکاریم)</option>
-                  </select>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* مانده حساب قبلی ریالی / تومانی */}
+                <div className="p-4 bg-amber-50/60 dark:bg-amber-950/20 rounded-xl border border-amber-200 dark:border-amber-800/60 grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                  <div className="sm:col-span-2 text-xs font-black text-amber-900 dark:text-amber-300 flex items-center gap-1.5">
+                    <Wallet size={14} />
+                    <span>۱. مانده حساب قبلی ریالی / تومانی</span>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-amber-900 dark:text-amber-300 mb-1">وضعیت حساب ریالی قبلی</label>
+                    <select
+                      value={officeForm.openingBalanceType}
+                      onChange={e => setOfficeForm({ ...officeForm, openingBalanceType: e.target.value as OpeningBalanceType })}
+                      className="w-full p-2.5 bg-white dark:bg-slate-900 border border-amber-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
+                    >
+                      <option value="NONE">بدون مانده ریالی قبلی (صفر)</option>
+                      <option value="DEBT_TO_SARRAF">بدهکار ریالی به صراف</option>
+                      <option value="CREDIT_FROM_SARRAF">بستانکار ریالی از صراف (طلب ما)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-amber-900 dark:text-amber-300 mb-1">مبلغ مانده ریالی (تومان)</label>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      dir="ltr"
+                      disabled={officeForm.openingBalanceType === 'NONE'}
+                      value={formatNumberInput(officeForm.openingBalanceToman)}
+                      onChange={e => setOfficeForm({ ...officeForm, openingBalanceToman: cleanNumberInput(e.target.value) })}
+                      placeholder="مبلغ به تومان..."
+                      className="w-full p-2.5 bg-white dark:bg-slate-900 border border-amber-300 dark:border-slate-700 rounded-xl text-sm font-mono font-bold text-slate-900 dark:text-white outline-none disabled:opacity-50 text-left"
+                    />
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-amber-900 dark:text-amber-300 mb-1">مبلغ مانده قبلی (تومان)</label>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    dir="ltr"
-                    disabled={officeForm.openingBalanceType === 'NONE'}
-                    value={formatNumberInput(officeForm.openingBalanceToman)}
-                    onChange={e => setOfficeForm({ ...officeForm, openingBalanceToman: cleanNumberInput(e.target.value) })}
-                    placeholder="مبلغ به تومان..."
-                    className="w-full p-2.5 bg-white dark:bg-slate-900 border border-amber-300 dark:border-slate-700 rounded-xl text-sm font-mono font-bold text-slate-900 dark:text-white outline-none disabled:opacity-50 text-left"
-                  />
+                {/* مانده حساب قبلی درهمی (مستقل) */}
+                <div className="p-4 bg-indigo-50/60 dark:bg-indigo-950/20 rounded-xl border border-indigo-200 dark:border-indigo-800/60 grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                  <div className="sm:col-span-2 text-xs font-black text-indigo-900 dark:text-indigo-300 flex items-center gap-1.5">
+                    <Coins size={14} />
+                    <span>۲. مانده حساب قبلی درهمی (AED نزد صراف)</span>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-indigo-900 dark:text-indigo-300 mb-1">وضعیت حساب درهمی قبلی</label>
+                    <select
+                      value={officeForm.openingBalanceAedType}
+                      onChange={e => setOfficeForm({ ...officeForm, openingBalanceAedType: e.target.value as OpeningBalanceType })}
+                      className="w-full p-2.5 bg-white dark:bg-slate-900 border border-indigo-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
+                    >
+                      <option value="NONE">بدون مانده درهمی قبلی (صفر)</option>
+                      <option value="CREDIT_FROM_SARRAF">طلب درهمی ما پیش صراف (صراف بدهکار درهم)</option>
+                      <option value="DEBT_TO_SARRAF">بدهی درهمی ما به صراف (صراف طلبکار درهم)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-indigo-900 dark:text-indigo-300 mb-1">مقدار مانده درهمی (AED)</label>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      dir="ltr"
+                      disabled={officeForm.openingBalanceAedType === 'NONE'}
+                      value={formatNumberInput(officeForm.openingBalanceAed)}
+                      onChange={e => setOfficeForm({ ...officeForm, openingBalanceAed: cleanNumberInput(e.target.value) })}
+                      placeholder="مقدار به درهم..."
+                      className="w-full p-2.5 bg-white dark:bg-slate-900 border border-indigo-300 dark:border-slate-700 rounded-xl text-sm font-mono font-bold text-indigo-700 dark:text-indigo-300 outline-none disabled:opacity-50 text-left"
+                    />
+                  </div>
                 </div>
+              </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-amber-900 dark:text-amber-300 mb-1">شرح مانده حساب قبلی</label>
-                  <input
-                    type="text"
-                    disabled={officeForm.openingBalanceType === 'NONE'}
-                    value={officeForm.openingBalanceDescription}
-                    onChange={e => setOfficeForm({ ...officeForm, openingBalanceDescription: e.target.value })}
-                    placeholder="مثال: مانده انتقالی از حساب قبلی..."
-                    className="w-full p-2.5 bg-white dark:bg-slate-900 border border-amber-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white outline-none disabled:opacity-50"
-                  />
-                </div>
-
+              <div className="flex flex-col sm:flex-row gap-3 items-center justify-between pt-1">
+                <input
+                  type="text"
+                  value={officeForm.openingBalanceDescription}
+                  onChange={e => setOfficeForm({ ...officeForm, openingBalanceDescription: e.target.value })}
+                  placeholder="توضیحات مانده حساب قبلی (اختیاری)..."
+                  className="w-full sm:flex-1 p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white outline-none"
+                />
                 <button
                   type="submit"
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 py-2.5 transition-all shadow-sm"
+                  className="w-full sm:w-auto px-6 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 py-2.5 transition-all shadow-sm"
                 >
                   <Plus size={18} />
                   <span>ثبت صراف جدید</span>
@@ -2275,7 +3007,7 @@ ${paymentsLines}
             </form>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {sarrafSummaries.map(s => (
               <div
                 key={s.id}
@@ -2317,44 +3049,117 @@ ${paymentsLines}
                   </div>
                 </div>
 
-                <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs">
-                  {(s.openingDebitToman > 0 || s.openingCreditToman > 0) && (
-                    <div className="flex justify-between p-2 rounded-lg bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/50">
-                      <span className="text-amber-800 dark:text-amber-300 font-bold">مانده حساب قبلی:</span>
-                      {s.openingDebitToman > 0 ? (
-                        <span className="font-mono font-bold text-rose-600 dark:text-rose-400" dir="ltr">
-                          {s.openingDebitToman.toLocaleString()} T (بدهکار)
-                        </span>
+                {/* ۱. باکس مجزای حساب درهمی (AED) صراف */}
+                <div className="p-3.5 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/25 border border-indigo-200/80 dark:border-indigo-800/60 space-y-2 text-xs">
+                  <div className="flex items-center justify-between font-black text-indigo-900 dark:text-indigo-300 border-b border-indigo-200/60 dark:border-indigo-800/50 pb-1.5">
+                    <span className="flex items-center gap-1.5">
+                      <Coins size={14} className="text-indigo-600" />
+                      <span>۱. حساب درهمی (AED)</span>
+                    </span>
+                    {s.netBalanceAed === 0 ? (
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 text-[10px]">
+                        تسویه درهمی (۰)
+                      </span>
+                    ) : s.netBalanceAed > 0 ? (
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px]" dir="ltr">
+                        +{s.netBalanceAed.toLocaleString()} AED طلب ما
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-md bg-rose-600 text-white text-[10px]" dir="ltr">
+                        {Math.abs(s.netBalanceAed).toLocaleString()} AED بدهی ما
+                      </span>
+                    )}
+                  </div>
+                  {(s.openingCreditAed > 0 || s.openingDebitAed > 0) && (
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-slate-500">مانده قبلی درهمی:</span>
+                      {s.openingCreditAed > 0 ? (
+                        <span className="font-mono font-bold text-emerald-600" dir="ltr">+{s.openingCreditAed.toLocaleString()} AED (طلب ما)</span>
                       ) : (
-                        <span className="font-mono font-bold text-blue-600 dark:text-blue-400" dir="ltr">
-                          {s.openingCreditToman.toLocaleString()} T (بستانکار)
-                        </span>
+                        <span className="font-mono font-bold text-rose-600" dir="ltr">-{s.openingDebitAed.toLocaleString()} AED (بدهی ما)</span>
                       )}
                     </div>
                   )}
                   <div className="flex justify-between">
-                    <span className="text-slate-500">کل درهم دریافتی از {s.name}:</span>
-                    <span className="font-mono font-black text-indigo-600 dark:text-indigo-400" dir="ltr">{s.totalAed.toLocaleString()} AED</span>
+                    <span className="text-slate-500">درهم خریداری‌شده در حواله‌ها:</span>
+                    <span className="font-mono font-bold text-slate-800 dark:text-slate-200" dir="ltr">{s.totalPurchasedAed.toLocaleString()} AED</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-500">مجموع بدهی (حواله‌ها + بدهی قبلی):</span>
+                    <span className="text-slate-500">درهم تحویل‌داده‌شده صراف:</span>
+                    <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400" dir="ltr">{s.totalDeliveredAed.toLocaleString()} AED</span>
+                  </div>
+                  <div className="flex justify-between pt-1.5 border-t border-indigo-200/50 dark:border-indigo-800/40 font-bold">
+                    <span className="text-slate-700 dark:text-slate-300">وضعیت درهم نزد {s.name}:</span>
+                    {s.netBalanceAed === 0 ? (
+                      <span className="font-mono text-emerald-600">۰ AED (تسویه)</span>
+                    ) : s.netBalanceAed > 0 ? (
+                      <span className="font-mono font-black text-emerald-600 dark:text-emerald-400" dir="ltr">
+                        {s.netBalanceAed.toLocaleString()} AED طلب درهمی ما
+                      </span>
+                    ) : (
+                      <span className="font-mono font-black text-rose-600 dark:text-rose-400" dir="ltr">
+                        {Math.abs(s.netBalanceAed).toLocaleString()} AED بدهکار درهمی
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* ۲. باکس مجزای حساب ریالی / تومانی صراف */}
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2 text-xs">
+                  <div className="flex items-center justify-between font-black text-slate-800 dark:text-slate-200 border-b border-slate-200 dark:border-slate-700 pb-1.5">
+                    <span className="flex items-center gap-1.5">
+                      <Wallet size={14} className="text-emerald-600" />
+                      <span>۲. حساب ریالی / تومانی</span>
+                    </span>
+                    {s.netBalanceToman === 0 ? (
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 text-[10px]">
+                        تسویه ریالی (۰)
+                      </span>
+                    ) : s.netBalanceToman > 0 ? (
+                      <span className="px-2 py-0.5 rounded-md bg-rose-600 text-white text-[10px]" dir="ltr">
+                        بدهکار به صراف
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-md bg-blue-600 text-white text-[10px]" dir="ltr">
+                        بستانکار از صراف (طلب ما)
+                      </span>
+                    )}
+                  </div>
+                  {(s.openingDebitToman > 0 || s.openingCreditToman > 0) && (
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-slate-500">مانده قبلی ریالی:</span>
+                      {s.openingDebitToman > 0 ? (
+                        <span className="font-mono font-bold text-rose-600" dir="ltr">{s.openingDebitToman.toLocaleString()} T (بدهکار)</span>
+                      ) : (
+                        <span className="font-mono font-bold text-blue-600" dir="ltr">{s.openingCreditToman.toLocaleString()} T (بستانکار)</span>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">کل بدهی ریالی (حواله‌ها + قبلی):</span>
                     <span className="font-mono font-bold text-slate-800 dark:text-slate-200" dir="ltr">{s.totalToman.toLocaleString()} T</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-500">واریزشده به کارت‌های {s.name}:</span>
+                    <span className="text-slate-500">کل واریزی ما به حساب‌های {s.name}:</span>
                     <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400" dir="ltr">{s.paidToman.toLocaleString()} T</span>
                   </div>
-                  <div className="flex justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-sm">
-                    <span className="font-bold text-slate-700 dark:text-slate-300">تراز نهایی با {s.name}:</span>
+                  {s.totalOverpaidToman > 0 && (
+                    <div className="flex justify-between text-[11px] text-blue-600 dark:text-blue-400 font-bold">
+                      <span>اضافه واریزی ثبت‌شده روی حواله‌ها:</span>
+                      <span className="font-mono" dir="ltr">+{s.totalOverpaidToman.toLocaleString()} T</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between pt-1.5 border-t border-slate-200 dark:border-slate-700 text-xs">
+                    <span className="font-bold text-slate-700 dark:text-slate-300">تراز نهایی ریالی:</span>
                     {s.netBalanceToman === 0 ? (
-                      <span className="font-mono font-black text-emerald-600">تسویه کامل (۰)</span>
+                      <span className="font-mono font-black text-emerald-600">۰ تومان (تسویه)</span>
                     ) : s.netBalanceToman > 0 ? (
                       <span className="font-mono font-black text-rose-600 dark:text-rose-400" dir="ltr">
-                        {s.netBalanceToman.toLocaleString()} T (بدهکار به صراف)
+                        {s.netBalanceToman.toLocaleString()} T بدهکاریم
                       </span>
                     ) : (
                       <span className="font-mono font-black text-blue-600 dark:text-blue-400" dir="ltr">
-                        {Math.abs(s.netBalanceToman).toLocaleString()} T (بستانکار از صراف)
+                        {Math.abs(s.netBalanceToman).toLocaleString()} T بستانکاریم (طلب ما)
                       </span>
                     )}
                   </div>
@@ -2366,7 +3171,7 @@ ${paymentsLines}
                     onClick={() => handleOpenOpeningBalanceModal(s)}
                     className="px-3 py-2 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 text-amber-800 dark:text-amber-300 rounded-xl text-xs font-bold transition-colors"
                   >
-                    ثبت مانده قبلی
+                    مانده قبلی
                   </button>
                   <button
                     type="button"
@@ -2472,7 +3277,7 @@ ${paymentsLines}
         </div>
       )}
 
-      {/* MODAL 0: REGISTER / EDIT SARRAF OPENING BALANCE (ثبت مانده حساب قبلی صرافی به صورت بدهکاری یا بستانکاری) */}
+      {/* MODAL 0: REGISTER / EDIT SARRAF OPENING BALANCE (ثبت مانده حساب قبلی ریالی یا درهمی صرافی) */}
       {showOpeningBalanceModal && (
         <div className="fixed inset-0 bg-black/60 dark:bg-black/80 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200 dark:border-slate-800 my-6 animate-in zoom-in-95 duration-200">
@@ -2483,10 +3288,10 @@ ${paymentsLines}
                 </div>
                 <div>
                   <h3 className="font-bold text-base sm:text-lg text-white">
-                    ثبت مانده حساب قبلی صرافی (بدهکاری / بستانکاری)
+                    ثبت مانده حساب قبلی صرافی (حساب ریالی یا حساب درهمی)
                   </h3>
                   <p className="text-xs text-amber-100 mt-0.5">
-                    ثبت حساب انتقالی از قبل با صراف (مثلاً مجید) به صورت بدهکار یا بستانکار
+                    ثبت طلب یا بدهی انتقالی از قبل نزد صراف به تفکیک درهم (AED) یا تومان
                   </p>
                 </div>
               </div>
@@ -2517,27 +3322,64 @@ ${paymentsLines}
                 </select>
               </div>
 
-              {/* انتخاب نوع مانده حساب قبلی: بدهکاری یا بستانکاری */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                  نوع مانده حساب قبلی <span className="text-red-500">*</span>
-                </label>
-                <div className="grid grid-cols-2 gap-3">
+              {/* انتخاب نوع حساب: ریالی، درهمی مستقل، یا تبدیل درهم به ریال */}
+              <div className="p-3.5 bg-slate-50 dark:bg-slate-800/70 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
+                <div className="text-xs font-bold text-slate-700 dark:text-slate-300">کدام حسابِ صراف مانده قبلی دارد؟</div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setObInputMode('TOMAN')}
+                    className={`p-2.5 rounded-xl text-xs font-bold border transition-all ${
+                      obInputMode === 'TOMAN'
+                        ? 'bg-slate-900 text-white border-slate-900 dark:bg-amber-600 dark:border-amber-500'
+                        : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    ۱. حساب ریالی / تومانی
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setObInputMode('AED_INDEPENDENT')}
+                    className={`p-2.5 rounded-xl text-xs font-bold border transition-all ${
+                      obInputMode === 'AED_INDEPENDENT'
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    ۲. حساب درهمی مستقل (AED)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setObInputMode('AED_CONVERTED')}
+                    className={`p-2.5 rounded-xl text-xs font-bold border transition-all ${
+                      obInputMode === 'AED_CONVERTED'
+                        ? 'bg-purple-600 text-white border-purple-600'
+                        : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    ۳. تبدیل درهم به تومان
+                  </button>
+                </div>
+
+                {/* انتخاب نوع مانده حساب قبلی: بدهکاری یا بستانکاری */}
+                <div className="grid grid-cols-2 gap-3 pt-1">
                   <button
                     type="button"
                     onClick={() => setObType('DEBT_TO_SARRAF')}
                     className={`p-3 rounded-xl border-2 text-right transition-all flex flex-col gap-1 ${
                       obType === 'DEBT_TO_SARRAF'
                         ? 'border-rose-600 bg-rose-50 dark:bg-rose-950/30 text-rose-800 dark:text-rose-300 shadow-sm'
-                        : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
+                        : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-900'
                     }`}
                   >
                     <div className="font-black text-xs flex items-center gap-1.5">
                       <TrendingDown size={15} className="text-rose-600" />
-                      <span>بدهکاری به صرافی</span>
+                      <span>{obInputMode === 'AED_INDEPENDENT' ? 'بدهی درهمی به صراف' : 'بدهکاری ریالی به صراف'}</span>
                     </div>
                     <p className="text-[10px] opacity-80">
-                      ما از قبل به صراف بدهکاریم (صراف طلبکار است)
+                      {obInputMode === 'AED_INDEPENDENT'
+                        ? 'ما به صراف درهم بدهکاریم'
+                        : 'ما به صراف ریال/تومان بدهکاریم'}
                     </p>
                   </button>
 
@@ -2547,50 +3389,25 @@ ${paymentsLines}
                     className={`p-3 rounded-xl border-2 text-right transition-all flex flex-col gap-1 ${
                       obType === 'CREDIT_FROM_SARRAF'
                         ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300 shadow-sm'
-                        : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
+                        : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-900'
                     }`}
                   >
                     <div className="font-black text-xs flex items-center gap-1.5">
                       <TrendingUp size={15} className="text-emerald-600" />
-                      <span>بستانکاری از صرافی</span>
+                      <span>{obInputMode === 'AED_INDEPENDENT' ? 'طلب درهمی ما از صراف' : 'بستانکاری ریالی از صراف'}</span>
                     </div>
                     <p className="text-[10px] opacity-80">
-                      ما از قبل از صراف طلبکاریم (صراف بدهکار است)
+                      {obInputMode === 'AED_INDEPENDENT'
+                        ? 'پیش صراف درهم طلب داریم (صراف بدهکار درهم است)'
+                        : 'از صراف تومان طلبکاریم (کسر خودکار از حواله‌های بعدی)'}
                     </p>
                   </button>
                 </div>
-              </div>
 
-              {/* انتخاب نحوه ورود مبلغ: تومان یا درهم */}
-              <div className="p-3.5 bg-slate-50 dark:bg-slate-800/70 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300">نحوه محاسبه مبلغ مانده قبلی:</span>
-                  <div className="flex items-center bg-white dark:bg-slate-900 p-1 rounded-lg border border-slate-200 dark:border-slate-700 gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setObInputMode('TOMAN')}
-                      className={`px-2.5 py-1 rounded text-xs font-bold ${
-                        obInputMode === 'TOMAN' ? 'bg-slate-800 text-white dark:bg-slate-700' : 'text-slate-500'
-                      }`}
-                    >
-                      بر اساس تومان
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setObInputMode('AED')}
-                      className={`px-2.5 py-1 rounded text-xs font-bold ${
-                        obInputMode === 'AED' ? 'bg-indigo-600 text-white' : 'text-slate-500'
-                      }`}
-                    >
-                      بر اساس درهم (AED)
-                    </button>
-                  </div>
-                </div>
-
-                {obInputMode === 'TOMAN' ? (
+                {obInputMode === 'TOMAN' && (
                   <div>
                     <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      مبلغ مانده حساب قبلی (تومان) <span className="text-red-500">*</span>
+                      مبلغ مانده حساب قبلی ریالی (تومان) <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"
@@ -2608,7 +3425,30 @@ ${paymentsLines}
                       </div>
                     )}
                   </div>
-                ) : (
+                )}
+
+                {obInputMode === 'AED_INDEPENDENT' && (
+                  <div>
+                    <label className="block text-xs font-bold text-indigo-700 dark:text-indigo-300 mb-1">
+                      مقدار مانده حساب قبلی درهمی (AED) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      dir="ltr"
+                      required
+                      value={formatNumberInput(obAedAmount)}
+                      onChange={e => setObAedAmount(cleanNumberInput(e.target.value))}
+                      placeholder="مثال: 15,000"
+                      className="w-full p-2.5 bg-white dark:bg-slate-900 border border-indigo-300 dark:border-slate-700 rounded-xl text-base font-mono font-black text-indigo-600 dark:text-indigo-400 outline-none focus:ring-2 focus:ring-indigo-500 text-left"
+                    />
+                    <p className="text-[11px] text-indigo-600 dark:text-indigo-400 mt-1">
+                      این مبلغ مستقیماً در «حساب درهمی صراف» ثبت می‌شود و با حساب ریالی تداخل ندارد.
+                    </p>
+                  </div>
+                )}
+
+                {obInputMode === 'AED_CONVERTED' && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">مقدار درهم قبلی (AED) *</label>
@@ -2682,7 +3522,7 @@ ${paymentsLines}
                   className="mt-0.5 w-4 h-4 rounded text-amber-600"
                 />
                 <label htmlFor="obCreateSettlementRow" className="text-xs text-slate-700 dark:text-slate-300 cursor-pointer leading-relaxed">
-                  <strong>نمایش در لیست اسناد و تسویه‌ها:</strong> با فعال بودن این گزینه، یک سند مجزا برای این مانده قبلی در لیست بالا ایجاد می‌شود تا بتوانید {obType === 'DEBT_TO_SARRAF' ? 'شماره کارت‌های ارسالی صراف را برای تسویه این بدهی قبلی ثبت کنید' : 'سند بستانکاری قبلی را در کاردکس و لیست مشاهده نمایید'}.
+                  <strong>نمایش در لیست اسناد و کاردکس:</strong> با فعال بودن این گزینه، یک سند مجزا برای این مانده قبلی در لیست بالا ایجاد می‌شود.
                 </label>
               </div>
 
@@ -2704,9 +3544,13 @@ ${paymentsLines}
                 >
                   <Save size={17} />
                   <span>
-                    {obType === 'DEBT_TO_SARRAF'
-                      ? 'ثبت مانده بدهکاری قبلی به صرافی'
-                      : 'ثبت مانده بستانکاری قبلی از صرافی'}
+                    {obInputMode === 'AED_INDEPENDENT'
+                      ? obType === 'CREDIT_FROM_SARRAF'
+                        ? 'ثبت طلب درهمی نزد صراف'
+                        : 'ثبت بدهی درهمی به صراف'
+                      : obType === 'DEBT_TO_SARRAF'
+                      ? 'ثبت مانده بدهکاری ریالی به صرافی'
+                      : 'ثبت مانده بستانکاری ریالی از صرافی'}
                   </span>
                 </button>
               </div>
@@ -2719,6 +3563,18 @@ ${paymentsLines}
       {activeSettlementTx && (() => {
         const sarrafName = getExchangeName(activeSettlementTx.exchangeId);
         const summary = getRemittanceSettlementSummary(activeSettlementTx);
+        const autoOffset = remittanceAutoOffsetMap[activeSettlementTx.id] || {
+          autoAppliedCreditToman: 0,
+          effectiveRemainingToman: summary.remaining,
+        };
+        const currentInputToman = parseFloat(payAmountToman) || 0;
+        const previousPaidExcludingCurrent = editingPaymentItemId
+          ? (activeSettlementTx.settlementPayments || [])
+              .filter(p => p.id !== editingPaymentItemId && p.status === 'PAID')
+              .reduce((acc, p) => acc + (p.paidAmountToman || p.allocatedAmountToman || 0), 0)
+          : summary.totalPaid;
+        const projectedTotalPaid = previousPaidExcludingCurrent + (payStatus === 'PAID' ? currentInputToman : 0);
+        const projectedOverpayment = Math.max(0, projectedTotalPaid + autoOffset.autoAppliedCreditToman - (activeSettlementTx.amountToman || 0));
 
         return (
           <div className="fixed inset-0 bg-black/60 dark:bg-black/80 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-sm overflow-y-auto">
@@ -2731,7 +3587,7 @@ ${paymentsLines}
                   <p className="text-xs text-indigo-100 mt-0.5">
                     {activeSettlementTx.isOpeningBalance
                       ? 'بابت تسویه مانده بدهکاری حساب قبلی'
-                      : `حواله ${activeSettlementTx.aedAmount.toLocaleString()} درهم با نرخ ${activeSettlementTx.aedRate.toLocaleString()} تومان`}
+                      : `حواله ${(activeSettlementTx.aedAmount || 0).toLocaleString()} درهم با نرخ ${(activeSettlementTx.aedRate || 0).toLocaleString()} تومان`}
                   </p>
                 </div>
                 <button
@@ -2746,23 +3602,31 @@ ${paymentsLines}
               </div>
 
               {/* Summary Banner Inside Modal */}
-              <div className="p-3.5 bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 grid grid-cols-3 gap-2 text-center text-xs">
+              <div className="p-3.5 bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
                 <div>
                   <div className="text-slate-400">مبلغ کل این ردیف</div>
                   <div className="font-mono font-bold text-slate-800 dark:text-white mt-0.5" dir="ltr">
-                    {activeSettlementTx.amountToman.toLocaleString()} T
+                    {(activeSettlementTx.amountToman || 0).toLocaleString()} T
                   </div>
                 </div>
                 <div>
-                  <div className="text-emerald-600">پرداخت‌شده تا الان</div>
+                  <div className="text-emerald-600">واریزی تا الان</div>
                   <div className="font-mono font-bold text-emerald-600 mt-0.5" dir="ltr">
-                    {summary.totalPaid.toLocaleString()} T
+                    {(summary.totalPaid || 0).toLocaleString()} T
                   </div>
                 </div>
+                {autoOffset.autoAppliedCreditToman > 0 && (
+                  <div>
+                    <div className="text-blue-600 font-bold">کسر از بستانکاری قبلی</div>
+                    <div className="font-mono font-black text-blue-600 dark:text-blue-400 mt-0.5" dir="ltr">
+                      -{(autoOffset.autoAppliedCreditToman || 0).toLocaleString()} T
+                    </div>
+                  </div>
+                )}
                 <div>
                   <div className="text-rose-600 font-bold">مانده قابل پرداخت</div>
                   <div className="font-mono font-black text-rose-600 dark:text-rose-400 mt-0.5" dir="ltr">
-                    {summary.remaining.toLocaleString()} T
+                    {(autoOffset.effectiveRemainingToman || 0).toLocaleString()} T
                   </div>
                 </div>
               </div>
@@ -2843,13 +3707,13 @@ ${paymentsLines}
                     <label className="text-xs font-black text-emerald-900 dark:text-emerald-300">
                       مبلغ واریزی به این کارت / حساب (تومان) <span className="text-red-500">*</span>
                     </label>
-                    {summary.remaining > 0 && (
+                    {autoOffset.effectiveRemainingToman > 0 && (
                       <button
                         type="button"
-                        onClick={() => setPayAmountToman(summary.remaining.toString())}
+                        onClick={() => setPayAmountToman(autoOffset.effectiveRemainingToman.toString())}
                         className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
                       >
-                        قرار دادن کل مانده ({summary.remaining.toLocaleString()} تومان)
+                        قرار دادن مانده نهایی ({autoOffset.effectiveRemainingToman.toLocaleString()} تومان)
                       </button>
                     )}
                   </div>
@@ -2867,6 +3731,17 @@ ${paymentsLines}
                   {parseFloat(payAmountToman) > 0 && (
                     <div className="text-[11px] text-emerald-800 dark:text-emerald-300">
                       معادل حروف: {numberToPersianWords(parseFloat(payAmountToman))}
+                    </div>
+                  )}
+
+                  {projectedOverpayment > 0 && (
+                    <div className="p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-xs text-blue-800 dark:text-blue-200 flex items-center justify-between gap-2">
+                      <span>
+                        <strong>اضافه واریزی به حساب صراف:</strong> این مبلغ بیشتر از بدهی این حواله است و در <strong>بستانکاری ریالی {sarrafName}</strong> ثبت شده و خودکار از حواله‌های بعدی کسر می‌گردد:
+                      </span>
+                      <span className="font-mono font-black text-blue-700 dark:text-blue-300 whitespace-nowrap" dir="ltr">
+                        +{projectedOverpayment.toLocaleString()} T
+                      </span>
                     </div>
                   )}
                 </div>
@@ -2937,7 +3812,7 @@ ${paymentsLines}
                     className="flex-[2] py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2"
                   >
                     <Save size={17} />
-                    <span>{payStatus === 'PAID' ? 'ثبت واریزی و کسر از بدهی' : 'ذخیره شماره کارت در لیست انتظار واریز'}</span>
+                    <span>{payStatus === 'PAID' ? 'ثبت واریزی و بروزرسانی حساب صراف' : 'ذخیره شماره کارت در لیست انتظار واریز'}</span>
                   </button>
                 </div>
               </form>
@@ -2945,6 +3820,102 @@ ${paymentsLines}
           </div>
         );
       })()}
+
+      {/* MODAL 1.5: EDIT AED DELIVERED AMOUNT FOR A REMITTANCE (ویرایش مقدار درهم تحویل‌شده صراف) */}
+      {editAedDeliveryModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 dark:border-slate-800 animate-in zoom-in-95 duration-150">
+            <div className="bg-indigo-600 p-4 text-white flex justify-between items-center">
+              <div>
+                <h3 className="font-bold text-base">بروزرسانی مقدار درهم تحویل‌شده صراف</h3>
+                <p className="text-xs text-indigo-100 mt-0.5">
+                  صراف: {getExchangeName(editAedDeliveryModal.tx.exchangeId)} | درهم خریداری‌شده: {(editAedDeliveryModal.tx.aedAmount || 0).toLocaleString()} AED
+                </p>
+              </div>
+              <button onClick={() => setEditAedDeliveryModal(null)} className="text-white/80 hover:text-white">
+                <X size={20} />
+              </button>
+            </div>
+            <form onSubmit={handleSaveAedDeliveryUpdate} className="p-5 space-y-4">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    مقدار درهم تحویل‌شده واقعی توسط صراف (AED)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setEditAedDeliveryModal({
+                      ...editAedDeliveryModal,
+                      deliveredStr: (editAedDeliveryModal.tx.aedAmount || 0).toString(),
+                    })}
+                    className="text-[11px] font-bold text-indigo-600 hover:underline"
+                  >
+                    تحویل کامل ({(editAedDeliveryModal.tx.aedAmount || 0).toLocaleString()} AED)
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
+                  required
+                  value={formatNumberInput(editAedDeliveryModal.deliveredStr)}
+                  onChange={e =>
+                    setEditAedDeliveryModal({
+                      ...editAedDeliveryModal,
+                      deliveredStr: cleanNumberInput(e.target.value),
+                    })
+                  }
+                  className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-base font-mono font-black text-indigo-600 dark:text-indigo-400 outline-none text-left"
+                  autoFocus
+                />
+              </div>
+
+              {(() => {
+                const purchased = editAedDeliveryModal.tx.aedAmount || 0;
+                const delivered = parseFloat(editAedDeliveryModal.deliveredStr) || 0;
+                const diff = purchased - delivered;
+                if (diff > 0) {
+                  return (
+                    <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-300 flex justify-between items-center">
+                      <span>طلب درهمی ما از صراف در این حواله:</span>
+                      <span className="font-mono font-black" dir="ltr">+{diff.toLocaleString()} AED</span>
+                    </div>
+                  );
+                }
+                if (diff < 0) {
+                  return (
+                    <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-xs text-rose-800 dark:text-rose-300 flex justify-between items-center">
+                      <span>بدهی درهمی ما به صراف (تحویل بیشتر):</span>
+                      <span className="font-mono font-black" dir="ltr">{Math.abs(diff).toLocaleString()} AED</span>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 text-xs text-slate-600 dark:text-slate-300 text-center font-bold">
+                    مقدار درهم این حواله به طور کامل تحویل شده است (۰ AED مانده).
+                  </div>
+                );
+              })()}
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditAedDeliveryModal(null)}
+                  className="flex-1 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="submit"
+                  className="flex-[2] py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-md"
+                >
+                  ذخیره در حساب درهمی صراف
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* MODAL 2: QUICK CONFIRM PAYMENT OF A PENDING SARRAF CARD */}
       {confirmPayModal && (
@@ -3023,6 +3994,10 @@ ${paymentsLines}
       {printVoucherTx && (() => {
         const sarrafName = getExchangeName(printVoucherTx.exchangeId);
         const summary = getRemittanceSettlementSummary(printVoucherTx);
+        const autoOffset = remittanceAutoOffsetMap[printVoucherTx.id] || {
+          autoAppliedCreditToman: 0,
+          effectiveRemainingToman: summary.remaining,
+        };
 
         return (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
@@ -3057,35 +4032,48 @@ ${paymentsLines}
               <div id="sarraf-remittance-voucher-print" className="p-8 bg-white text-slate-900 space-y-6" dir="rtl">
                 <div className="border-b-2 border-slate-800 pb-4 flex justify-between items-center">
                   <div>
-                    <h2 className="text-xl font-black text-slate-900">صورت‌وضعیت مالی و تسویه ریالی با صرافی</h2>
+                    <h2 className="text-xl font-black text-slate-900">صورت‌وضعیت مالی و تسویه با صرافی</h2>
                     <p className="text-xs text-slate-500 mt-1">نام صراف طرف حساب: <strong>{sarrafName}</strong></p>
                   </div>
                   <div className="text-left text-xs font-mono space-y-1">
                     <div>تاریخ: {printVoucherTx.date}</div>
-                    <div>وضعیت: {summary.isFullySettled ? 'تسویه کامل' : 'در حال تسویه'}</div>
+                    <div>وضعیت: {autoOffset.effectiveRemainingToman === 0 ? 'تسویه کامل' : 'در حال تسویه'}</div>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-4 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200 text-center">
                   <div>
-                    <div className="text-xs text-slate-500">مقدار درهم</div>
-                    <div className="font-mono font-black text-base text-indigo-700 mt-1" dir="ltr">
-                      {printVoucherTx.aedAmount > 0 ? `${printVoucherTx.aedAmount.toLocaleString()} AED` : 'مانده قبلی'}
+                    <div className="text-xs text-slate-500">درهم خرید / تحویل</div>
+                    <div className="font-mono font-black text-sm text-indigo-700 mt-1" dir="ltr">
+                      {(printVoucherTx.aedAmount || 0) > 0
+                        ? `${(printVoucherTx.aedAmount || 0).toLocaleString()} / ${(summary.aedDelivered || 0).toLocaleString()} AED`
+                        : 'مانده قبلی'}
                     </div>
                   </div>
                   <div>
                     <div className="text-xs text-slate-500">نرخ درهم</div>
                     <div className="font-mono font-bold text-base text-slate-800 mt-1" dir="ltr">
-                      {printVoucherTx.aedRate > 0 ? `${printVoucherTx.aedRate.toLocaleString()} تومان` : '-'}
+                      {(printVoucherTx.aedRate || 0) > 0 ? `${(printVoucherTx.aedRate || 0).toLocaleString()} تومان` : '-'}
                     </div>
                   </div>
                   <div>
                     <div className="text-xs text-slate-500">مبلغ کل (تومان)</div>
-                    <div className="font-mono font-black text-base text-slate-900 mt-1" dir="ltr">{printVoucherTx.amountToman.toLocaleString()}</div>
+                    <div className="font-mono font-black text-base text-slate-900 mt-1" dir="ltr">{(printVoucherTx.amountToman || 0).toLocaleString()}</div>
                   </div>
                   <div>
-                    <div className="text-xs text-slate-500">مانده تسویه‌نشده</div>
-                    <div className="font-mono font-black text-base text-rose-600 mt-1" dir="ltr">{summary.remaining.toLocaleString()}</div>
+                    <div className="text-xs text-slate-500">
+                      {summary.overpaidToman > 0 ? 'اضافه واریزی (بستانکاری)' : 'مانده نهایی'}
+                    </div>
+                    <div
+                      className={`font-mono font-black text-base mt-1 ${
+                        summary.overpaidToman > 0 ? 'text-blue-600' : 'text-rose-600'
+                      }`}
+                      dir="ltr"
+                    >
+                      {summary.overpaidToman > 0
+                        ? `+${(summary.overpaidToman || 0).toLocaleString()}`
+                        : (autoOffset.effectiveRemainingToman || 0).toLocaleString()}
+                    </div>
                   </div>
                 </div>
 
@@ -3113,7 +4101,7 @@ ${paymentsLines}
                             {p.cardNumber ? formatCardDisplay(p.cardNumber) : p.shebaNumber || '-'}
                           </td>
                           <td className="border border-slate-300 p-2 text-center font-mono font-bold" dir="ltr">
-                            {(p.paidAmountToman || p.allocatedAmountToman).toLocaleString()}
+                            {((p.paidAmountToman || p.allocatedAmountToman) || 0).toLocaleString()}
                           </td>
                           <td className="border border-slate-300 p-2 text-center font-mono">
                             {p.trackingCode || '-'} {p.paymentDate ? `(${p.paymentDate})` : ''}
@@ -3135,10 +4123,12 @@ ${paymentsLines}
                       <tr>
                         <td colSpan={4} className="border border-slate-300 p-2 text-left">مجموع واریزشده به حساب‌های صراف:</td>
                         <td className="border border-slate-300 p-2 text-center font-mono text-emerald-700" dir="ltr">
-                          {summary.totalPaid.toLocaleString()} تومان
+                          {(summary.totalPaid || 0).toLocaleString()} تومان
                         </td>
                         <td colSpan={2} className="border border-slate-300 p-2 text-center font-mono">
-                          مانده: {summary.remaining.toLocaleString()} تومان
+                          {summary.overpaidToman > 0
+                            ? `اضافه واریزی (بستانکاری): +${(summary.overpaidToman || 0).toLocaleString()} تومان`
+                            : `مانده نهایی: ${(autoOffset.effectiveRemainingToman || 0).toLocaleString()} تومان`}
                         </td>
                       </tr>
                     </tfoot>
@@ -3150,7 +4140,7 @@ ${paymentsLines}
         );
       })()}
 
-      {/* MODAL 4: SARRAF DETAILED LEDGER (کاردکس اختصاصی صراف) */}
+      {/* MODAL 4: SARRAF DETAILED LEDGER (کاردکس اختصاصی صراف به تفکیک حساب درهمی و ریالی) */}
       {ledgerSarrafId && (() => {
         const sarraf = sarrafSummaries.find(s => s.id === ledgerSarrafId);
         const sarrafTxs = exchangeTransactions.filter(t => t.exchangeId === ledgerSarrafId).slice().reverse();
@@ -3161,12 +4151,9 @@ ${paymentsLines}
             <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200 dark:border-slate-800">
               <div className="p-4 sm:p-5 bg-indigo-600 text-white flex justify-between items-center">
                 <div>
-                  <h3 className="font-bold text-lg text-white">کاردکس جامع صراف: {sarraf.name}</h3>
+                  <h3 className="font-bold text-lg text-white">کاردکس جامع دوارزی صراف: {sarraf.name}</h3>
                   <p className="text-xs text-indigo-100 mt-0.5">
-                    کل درهم دریافتی: {sarraf.totalAed.toLocaleString()} AED | کل واریزی ما: {sarraf.paidToman.toLocaleString()} تومان |{' '}
-                    {sarraf.netBalanceToman >= 0
-                      ? `مانده بدهی به صراف: ${sarraf.netBalanceToman.toLocaleString()} تومان`
-                      : `مانده بستانکاری ما از صراف: ${Math.abs(sarraf.netBalanceToman).toLocaleString()} تومان`}
+                    تفکیک کامل «حساب درهمی (AED)» و «حساب ریالی / تومانی» به همراه کسر خودکار اضافه واریزی‌ها
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -3186,34 +4173,77 @@ ${paymentsLines}
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {(sarraf.openingBalanceType && sarraf.openingBalanceType !== 'NONE' && (sarraf.openingBalanceToman || 0) > 0) && (
-                  <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 flex justify-between items-center text-xs font-bold">
-                    <span className="text-amber-900 dark:text-amber-300">
-                      مانده اول دوره ثبت‌شده روی پروفایل صراف ({sarraf.openingBalanceDescription || 'مانده قبلی'}):
-                    </span>
-                    <span className={sarraf.openingBalanceType === 'DEBT_TO_SARRAF' ? 'text-rose-600 font-mono' : 'text-emerald-600 font-mono'} dir="ltr">
-                      {(sarraf.openingBalanceToman || 0).toLocaleString()} تومان ({sarraf.openingBalanceType === 'DEBT_TO_SARRAF' ? 'بدهکار به صراف' : 'بستانکار از صراف'})
+              {/* Dual-Currency Summary Header inside Ledger Modal */}
+              <div className="p-4 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-700 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 space-y-1.5">
+                  <div className="font-black text-indigo-700 dark:text-indigo-300 flex justify-between">
+                    <span>۱. خلاصه حساب درهمی (AED) نزد {sarraf.name}</span>
+                    <span className="font-mono" dir="ltr">
+                      {sarraf.netBalanceAed === 0
+                        ? 'تسویه (0 AED)'
+                        : sarraf.netBalanceAed > 0
+                        ? `+${(sarraf.netBalanceAed || 0).toLocaleString()} AED طلب ما`
+                        : `${Math.abs(sarraf.netBalanceAed || 0).toLocaleString()} AED بدهی ما`}
                     </span>
                   </div>
-                )}
+                  <div className="flex justify-between text-slate-500">
+                    <span>درهم خریداری‌شده: {(sarraf.totalPurchasedAed || 0).toLocaleString()} AED</span>
+                    <span>درهم تحویل‌شده: {(sarraf.totalDeliveredAed || 0).toLocaleString()} AED</span>
+                  </div>
+                </div>
 
+                <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-800 space-y-1.5">
+                  <div className="font-black text-emerald-700 dark:text-emerald-300 flex justify-between">
+                    <span>۲. خلاصه حساب ریالی / تومانی با {sarraf.name}</span>
+                    <span className="font-mono" dir="ltr">
+                      {sarraf.netBalanceToman === 0
+                        ? 'تسویه (0 T)'
+                        : sarraf.netBalanceToman > 0
+                        ? `${(sarraf.netBalanceToman || 0).toLocaleString()} T بدهکاریم`
+                        : `${Math.abs(sarraf.netBalanceToman || 0).toLocaleString()} T بستانکاریم`}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-slate-500">
+                    <span>کل بدهی ریالی: {(sarraf.totalToman || 0).toLocaleString()} T</span>
+                    <span>کل واریزی ما: {(sarraf.paidToman || 0).toLocaleString()} T</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {sarrafTxs.map(tx => {
                   const s = getRemittanceSettlementSummary(tx);
+                  const autoOffset = remittanceAutoOffsetMap[tx.id] || {
+                    autoAppliedCreditToman: 0,
+                    effectiveRemainingToman: s.remaining,
+                  };
                   return (
                     <div key={tx.id} className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2 bg-slate-50/50 dark:bg-slate-800/40">
                       <div className="flex flex-wrap justify-between items-center gap-2 text-xs font-bold">
                         <span className="text-slate-800 dark:text-white">
                           {tx.isOpeningBalance
-                            ? `تاریخ: ${tx.date} — سند مانده حساب قبلی (${tx.openingBalanceType === 'CREDIT_FROM_SARRAF' ? 'بستانکاری از صراف' : 'بدهکاری به صراف'})`
-                            : `تاریخ: ${tx.date} — دریافت ${tx.aedAmount.toLocaleString()} درهم با نرخ ${tx.aedRate.toLocaleString()} تومان`}
+                            ? `تاریخ: ${tx.date} — سند مانده حساب قبلی ${tx.openingBalanceCurrency === 'AED' ? 'درهمی' : 'ریالی'} (${tx.openingBalanceType === 'CREDIT_FROM_SARRAF' ? 'بستانکاری / طلب ما از صراف' : 'بدهکاری به صراف'})`
+                            : `تاریخ: ${tx.date} — خرید ${(tx.aedAmount || 0).toLocaleString()} درهم (تحویل: ${(s.aedDelivered || 0).toLocaleString()} AED) با نرخ ${(tx.aedRate || 0).toLocaleString()} تومان`}
                         </span>
-                        <div className="flex items-center gap-3 font-mono" dir="ltr">
-                          <span>مبلغ: {tx.amountToman.toLocaleString()} T</span>
-                          {!s.isCreditRecord && (
+                        <div className="flex flex-wrap items-center gap-3 font-mono" dir="ltr">
+                          {tx.openingBalanceCurrency === 'AED' ? (
+                            <span className="text-indigo-600 font-black">{(tx.aedAmount || 0).toLocaleString()} AED</span>
+                          ) : (
                             <>
-                              <span className="text-emerald-600">واریزی: {s.totalPaid.toLocaleString()} T</span>
-                              <span className="text-rose-600">مانده: {s.remaining.toLocaleString()} T</span>
+                              <span>مبلغ: {(tx.amountToman || 0).toLocaleString()} T</span>
+                              {!s.isCreditRecord && (
+                                <>
+                                  <span className="text-emerald-600">واریزی: {(s.totalPaid || 0).toLocaleString()} T</span>
+                                  {autoOffset.autoAppliedCreditToman > 0 && (
+                                    <span className="text-blue-600">کسر از بستانکاری: -{(autoOffset.autoAppliedCreditToman || 0).toLocaleString()} T</span>
+                                  )}
+                                  {s.overpaidToman > 0 ? (
+                                    <span className="text-blue-600 font-black">اضافه واریزی (بستانکاری): +{(s.overpaidToman || 0).toLocaleString()} T</span>
+                                  ) : (
+                                    <span className="text-rose-600">مانده: {(autoOffset.effectiveRemainingToman || 0).toLocaleString()} T</span>
+                                  )}
+                                </>
+                              )}
                             </>
                           )}
                         </div>
@@ -3226,7 +4256,7 @@ ${paymentsLines}
                                 {p.accountHolderName} ({p.bankName}) — {p.cardNumber ? formatCardDisplay(p.cardNumber) : p.shebaNumber}
                               </span>
                               <span className="font-mono font-bold" dir="ltr">
-                                {(p.paidAmountToman || p.allocatedAmountToman).toLocaleString()} T ({p.status === 'PAID' ? 'واریز شد' : 'منتظر واریز'})
+                                {((p.paidAmountToman || p.allocatedAmountToman) || 0).toLocaleString()} T ({p.status === 'PAID' ? 'واریز شد' : 'منتظر واریز'})
                               </span>
                             </div>
                           ))}

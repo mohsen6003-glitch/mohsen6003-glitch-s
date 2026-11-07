@@ -10,11 +10,36 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       host: '0.0.0.0',
+      hmr: false,
     },
     build: {
       chunkSizeWarningLimit: 3000,
     },
     plugins: [
+      {
+        name: 'safe-pwa-dev-hmr',
+        enforce: 'pre',
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            if (req.url?.includes('@vite-plugin-pwa/pwa-entry-point-loaded')) {
+              res.setHeader('Content-Type', 'application/javascript');
+              res.end('export {};');
+              return;
+            }
+            next();
+          });
+        },
+        resolveId(id) {
+          if (id.includes('@vite-plugin-pwa/pwa-entry-point-loaded')) {
+            return '\0safe-pwa-entry-point-loaded';
+          }
+        },
+        load(id) {
+          if (id === '\0safe-pwa-entry-point-loaded') {
+            return 'export {};';
+          }
+        },
+      },
       react(),
       tailwindcss(),
       VitePWA({
@@ -68,7 +93,7 @@ export default defineConfig(({ mode }) => {
           skipWaiting: true,
         },
         devOptions: {
-          enabled: true,
+          enabled: false,
           type: 'module',
         },
       }),

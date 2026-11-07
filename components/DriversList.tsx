@@ -24,7 +24,7 @@ interface SortConfig {
 }
 
 const DriversList: React.FC = () => {
-  const { drivers, transactions, driverPayments, freights, driverVehicleExpenses, getDriverBalance, addDriverPayment, addDriverSettlement, addTransaction, addFreight, updateDriver, deleteDriver, exchangeRates, updateExchangeRates, addToQueue, queue, updateTransaction, updateDriverPayment, updateFreight, updateDriverVehicleExpense } = useData();
+  const { drivers, transactions, driverPayments, freights, driverVehicleExpenses, tankerUnits, ownedTruckUnits, getDriverBalance, addDriverPayment, addDriverSettlement, addTransaction, addFreight, updateDriver, deleteDriver, exchangeRates, updateExchangeRates, addToQueue, queue, updateTransaction, updateDriverPayment, updateFreight, updateDriverVehicleExpense, transferOrSwapTanker } = useData();
   
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [expenseModalDriverId, setExpenseModalDriverId] = useState<string | null>(null);
@@ -144,6 +144,8 @@ const DriversList: React.FC = () => {
     phone: '', 
     plateNumber: '', 
     tankNumber: '', 
+    tankerCode: '',
+    mountedTankerId: '',
     nationalId: '', 
     licenseNo: '', 
     shebaNumber: '', 
@@ -174,7 +176,23 @@ const DriversList: React.FC = () => {
   const [exportType, setExportType] = useState<'csv' | 'pdf'>('csv');
 
   const [showColumnSelector, setShowColumnSelector] = useState(false);
-  const [visibleColumns, setVisibleColumns] = useState<string[]>(['fullName', 'plateNumber', 'phone', 'previousBalance', 'balance', 'actions']);
+  const defaultVisibleColumns = ['fullName', 'plateNumber', 'tankNumber', 'phone', 'previousBalance', 'balance', 'actions'];
+  const [visibleColumns, setVisibleColumns] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('gas_app_drivers_visible_columns');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return defaultVisibleColumns;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('gas_app_drivers_visible_columns', JSON.stringify(visibleColumns));
+    } catch (e) {}
+  }, [visibleColumns]);
 
   const availableColumns = [
       { id: 'fullName', label: 'نام راننده' },
@@ -183,6 +201,7 @@ const DriversList: React.FC = () => {
       { id: 'tankNumber', label: 'شماره تانکر' },
       { id: 'licenseNo', label: 'شماره گواهینامه' },
       { id: 'phone', label: 'تلفن تماس' },
+      { id: 'cardNumber', label: 'شماره کارت / بانک' },
       { id: 'previousBalance', label: 'حساب قبلی' },
       { id: 'balance', label: 'تراز مالی کل' },
       { id: 'actions', label: 'عملیات' },
@@ -191,12 +210,12 @@ const DriversList: React.FC = () => {
   const exportColumns = [
       { id: 'fullName', label: 'نام راننده' },
       { id: 'plateNumber', label: 'پلاک' },
+      { id: 'tankNumber', label: 'شماره تانکر' },
       { id: 'phone', label: 'تلفن' },
-      { id: 'previousBalance', label: 'حساب قبلی' },
-      { id: 'balance', label: 'تراز مالی' },
       { id: 'nationalId', label: 'کد ملی' },
       { id: 'licenseNo', label: 'شماره گواهینامه' },
-      { id: 'tankNumber', label: 'شماره تانکر' },
+      { id: 'previousBalance', label: 'حساب قبلی' },
+      { id: 'balance', label: 'تراز مالی' },
   ];
 
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
@@ -229,12 +248,19 @@ const DriversList: React.FC = () => {
     let result = drivers;
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
-      result = result.filter(d => 
+      result = result.filter(d => {
+        const mounted = (tankerUnits || []).find(u => u.assignedDriverId === d.id && u.status === 'MOUNTED');
+        return (
           (d.fullName || '').toLowerCase().includes(term) ||
           (d.phone || '').includes(term) ||
-          (d.plateNumber || '').includes(term) ||
-          (d.nationalId || '').includes(term)
-      );
+          (d.plateNumber || '').toLowerCase().includes(term) ||
+          (d.nationalId || '').includes(term) ||
+          (d.tankNumber || '').toLowerCase().includes(term) ||
+          (d.tankerCode || '').toLowerCase().includes(term) ||
+          (mounted?.tankerCode || '').toLowerCase().includes(term) ||
+          (mounted?.tankNumber || '').toLowerCase().includes(term)
+        );
+      });
     }
 
     const driversWithBalance = result.map(d => {
@@ -537,12 +563,17 @@ const DriversList: React.FC = () => {
   };
 
   const handleOpenEdit = (driver: Driver) => {
+      const mounted = (tankerUnits || []).find(
+        u => u.assignedDriverId === driver.id && u.status === 'MOUNTED'
+      );
       setEditDriverId(driver.id);
       setEditForm({
           fullName: driver.fullName,
           phone: driver.phone,
           plateNumber: driver.plateNumber,
-          tankNumber: driver.tankNumber,
+          tankNumber: mounted?.tankNumber || driver.tankNumber,
+          tankerCode: mounted?.tankerCode || driver.tankerCode || '',
+          mountedTankerId: mounted?.id || driver.mountedTankerId || '',
           nationalId: driver.nationalId || '',
           licenseNo: driver.licenseNo || '',
           shebaNumber: driver.shebaNumber || '',
@@ -564,6 +595,20 @@ const DriversList: React.FC = () => {
               editForm.previousBalanceType !== 'NONE'
                   ? parseFloat(cleanNumberInput(editForm.previousBalanceAmount)) || 0
                   : 0;
+
+          if (editForm.mountedTankerId) {
+            const targetUnit = (tankerUnits || []).find(u => u.id === editForm.mountedTankerId);
+            if (targetUnit && targetUnit.assignedDriverId !== editDriverId) {
+              transferOrSwapTanker({
+                tankerId: targetUnit.id,
+                targetDriverId: editDriverId,
+                mode: targetUnit.assignedDriverId ? 'SWAP_TANKERS' : 'TRANSFER_REPLACE',
+                date: new Date().toLocaleDateString('fa-IR'),
+                note: 'تغییر / جابه‌جایی تانکر از بخش ویرایش کامیون و راننده'
+              });
+            }
+          }
+
           updateDriver(editDriverId, {
               ...editForm,
               previousBalanceType: prevAmountNum > 0 ? editForm.previousBalanceType : 'NONE',
@@ -905,7 +950,18 @@ const DriversList: React.FC = () => {
             <div className="flex flex-col sm:flex-row items-center gap-3 w-full lg:w-auto flex-wrap">
                 <div className="relative w-full sm:w-64"><Search className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" size={18} /><input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="جستجو..." className="w-full pr-10 pl-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm transition-shadow" />{searchTerm && (<button onClick={() => setSearchTerm('')} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-500"><X size={14} /></button>)}</div>
                 <div className="flex items-center gap-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 p-1 rounded-lg w-full sm:w-auto justify-center shadow-sm"><button onClick={() => setViewCurrency('toman')} className={`px-3 py-1 text-xs rounded transition-all ${viewCurrency === 'toman' ? 'bg-slate-800 dark:bg-slate-700 text-white' : 'text-slate-600 dark:text-slate-400'}`}>تومان</button><button onClick={() => setViewCurrency('usd')} className={`px-3 py-1 text-xs rounded transition-all ${viewCurrency === 'usd' ? 'bg-blue-600 dark:bg-blue-600 text-white' : 'text-slate-600 dark:text-slate-400'}`}>دلار</button></div>
-                <button onClick={() => setShowColumnSelector(!showColumnSelector)} className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-200 text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"><Settings2 size={16} /> ستون‌ها</button>
+                <button
+                  type="button"
+                  onClick={() => setShowColumnSelector(!showColumnSelector)}
+                  className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-bold transition-all cursor-pointer ${
+                    showColumnSelector
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-500/20'
+                      : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  <Settings2 size={16} />
+                  <span>ستون‌ها ({visibleColumns.length})</span>
+                </button>
                 <button 
                   onClick={() => { setBreakdownDriverId(null); setShowDebtBreakdownModal(true); }}
                   className="flex items-center gap-2 px-3.5 py-2 bg-gradient-to-r from-rose-600 to-amber-600 text-white rounded-lg text-sm font-bold shadow-md hover:from-rose-700 hover:to-amber-700 transition-all active:scale-95"
@@ -929,11 +985,73 @@ const DriversList: React.FC = () => {
                 </button>
                 <div className="flex items-center gap-2">
                     <button onClick={() => openExportModal('pdf')} disabled={isExportingPdf} className="p-2 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg" title="PDF خروجی">{isExportingPdf ? '...' : <FileDown size={16} />}</button>
-                    <button onClick={() => openExportModal('csv')} className="p-2 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 rounded-lg" title="CSV خروجی"><Download size={16} /></button>
+                    <button onClick={() => openExportModal('csv')} className="p-2 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-slate-800 rounded-lg" title="CSV خروجی"><Download size={16} /></button>
                     <button onClick={handlePrint} className="flex items-center gap-2 px-4 py-2 bg-slate-800 dark:bg-slate-700 text-white rounded-lg text-sm font-medium hover:bg-slate-900 dark:hover:bg-slate-600 transition-colors"><Printer size={16} /> چاپ</button>
                 </div>
             </div>
         </div>
+
+        {/* پنل انتخاب و شخصی‌سازی ستون‌های جدول رانندگان */}
+        {showColumnSelector && (
+          <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 mb-4 border border-blue-200 dark:border-blue-800/70 shadow-lg animate-in fade-in slide-in-from-top-2 duration-200 print:hidden">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 mb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <Settings2 size={18} className="text-blue-600 dark:text-blue-400" />
+                <span className="text-sm font-black text-slate-800 dark:text-white">
+                  انتخاب ستون‌های قابل نمایش در جدول رانندگان:
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setVisibleColumns(availableColumns.map(c => c.id))}
+                  className="px-3 py-1 text-xs font-bold bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-lg hover:bg-blue-100 transition-colors cursor-pointer"
+                >
+                  نمایش همه ستون‌ها
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVisibleColumns(defaultVisibleColumns)}
+                  className="px-3 py-1 text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg hover:bg-slate-200 transition-colors cursor-pointer"
+                >
+                  بازگردانی به پیش‌فرض
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowColumnSelector(false)}
+                  className="p-1 text-slate-400 hover:text-rose-500 rounded-lg cursor-pointer"
+                  title="بستن"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5">
+              {availableColumns.map(col => {
+                const isSelected = visibleColumns.includes(col.id);
+                return (
+                  <button
+                    key={col.id}
+                    type="button"
+                    onClick={() => toggleColumn(col.id)}
+                    className={`flex items-center gap-2 p-2.5 rounded-xl border text-right text-xs font-bold transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-400 dark:border-blue-700 text-blue-800 dark:text-blue-200 shadow-sm'
+                        : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-100'
+                    }`}
+                  >
+                    {isSelected ? (
+                      <CheckSquare size={16} className="text-blue-600 dark:text-blue-400 shrink-0" />
+                    ) : (
+                      <Square size={16} className="text-slate-400 shrink-0" />
+                    )}
+                    <span className="truncate">{col.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden print:border-0 print:shadow-none">
             <div className="overflow-x-auto" id="drivers-list-table-container">
@@ -941,8 +1059,12 @@ const DriversList: React.FC = () => {
                 <thead className="bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 text-xs font-semibold print:bg-white print:text-slate-900 print:border-b-2 print:border-slate-800">
                 <tr>
                     {visibleColumns.includes('fullName') && (<th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('fullName')}>نام راننده <SortIcon colKey="fullName" /></th>)}
+                    {visibleColumns.includes('nationalId') && (<th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('nationalId')}>کد ملی <SortIcon colKey="nationalId" /></th>)}
                     {visibleColumns.includes('plateNumber') && (<th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('plateNumber')}>پلاک <SortIcon colKey="plateNumber" /></th>)}
+                    {visibleColumns.includes('tankNumber') && (<th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('tankNumber')}>شماره تانکر <SortIcon colKey="tankNumber" /></th>)}
+                    {visibleColumns.includes('licenseNo') && (<th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('licenseNo')}>شماره گواهینامه <SortIcon colKey="licenseNo" /></th>)}
                     {visibleColumns.includes('phone') && (<th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('phone')}>تلفن <SortIcon colKey="phone" /></th>)}
+                    {visibleColumns.includes('cardNumber') && (<th className="px-6 py-4">شماره کارت / بانک</th>)}
                     {visibleColumns.includes('previousBalance') && (<th className="px-6 py-4 cursor-pointer bg-purple-50/40 dark:bg-purple-950/15" onClick={() => handleSort('previousBalance')}>حساب قبلی <SortIcon colKey="previousBalance" /></th>)}
                     {visibleColumns.includes('balance') && (<th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('balance')}>تراز مالی کل <SortIcon colKey="balance" /></th>)}
                     {visibleColumns.includes('actions') && (<th className="px-6 py-4 text-center print:hidden">عملیات</th>)}
@@ -956,11 +1078,102 @@ const DriversList: React.FC = () => {
                         ? Math.max(0, (d.previousBalanceAmount || 0) - d.paidTowardPrevious)
                         : (d.previousBalanceAmount || 0);
 
+                    const mountedTanker = (tankerUnits || []).find(
+                        u => u.assignedDriverId === d.id && u.status === 'MOUNTED'
+                    );
+                    const tankerOwnerLabel = mountedTanker?.ownerName || d.tankOwnerName;
+                    const tankerCodeBadge = mountedTanker?.tankerCode || d.tankerCode;
+                    const tankerCodeLabel = mountedTanker?.tankNumber || d.tankNumber;
+
+                    const linkedTruckOwnerUnit = (ownedTruckUnits || []).find(
+                        u => u.driverId === d.id
+                    );
+                    const truckOwnerLabel = linkedTruckOwnerUnit?.ownerName || d.truckOwnerName;
+                    const payToOwnerFlag =
+                        linkedTruckOwnerUnit !== undefined
+                            ? linkedTruckOwnerUnit.depositFreightToOwnerAccount
+                            : d.payFreightToTruckOwner;
+
                     return (
                     <tr key={d.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors text-slate-800 dark:text-slate-200">
-                        {visibleColumns.includes('fullName') && (<td className="px-6 py-4 font-medium">{d.fullName}</td>)}
+                        {visibleColumns.includes('fullName') && (
+                            <td className="px-6 py-4 font-medium">
+                                <div>{d.fullName}</div>
+                                <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                    {truckOwnerLabel && (
+                                        <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-[10px] font-bold text-blue-700 dark:text-blue-300">
+                                            <span>صاحب کامیون: {truckOwnerLabel}</span>
+                                            {payToOwnerFlag !== false && (
+                                                <>
+                                                    <span className="opacity-60">|</span>
+                                                    <span className="text-emerald-700 dark:text-emerald-400">واریز کرایه به صاحب کامیون</span>
+                                                </>
+                                            )}
+                                        </div>
+                                    )}
+                                    {(tankerOwnerLabel || tankerCodeBadge) && (
+                                        <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 text-[10px] font-bold text-indigo-700 dark:text-indigo-300">
+                                            {tankerCodeBadge && <span>کد تانکر: {tankerCodeBadge}</span>}
+                                            <span>مخزن: {tankerCodeLabel || '---'}</span>
+                                            {tankerOwnerLabel && (
+                                              <>
+                                                <span className="opacity-60">|</span>
+                                                <span>{tankerOwnerLabel}</span>
+                                              </>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            </td>
+                        )}
+                        {visibleColumns.includes('nationalId') && (
+                            <td className="px-6 py-4 font-mono text-xs text-slate-600 dark:text-slate-400">
+                                {d.nationalId || '---'}
+                            </td>
+                        )}
                         {visibleColumns.includes('plateNumber') && (<td className="px-6 py-4"><span className="px-2 py-1 bg-slate-100 dark:bg-slate-800 border dark:border-slate-700 rounded font-mono text-sm dark:text-slate-300">{d.plateNumber}</span></td>)}
+                        {visibleColumns.includes('tankNumber') && (
+                            <td className="px-6 py-4">
+                                {tankerCodeBadge || tankerCodeLabel ? (
+                                    <div className="inline-flex flex-col gap-1">
+                                        {tankerCodeBadge && (
+                                            <span className="px-2 py-0.5 bg-slate-900 dark:bg-indigo-600 text-white rounded font-mono text-[11px] font-black w-fit">
+                                                کد: {tankerCodeBadge}
+                                            </span>
+                                        )}
+                                        {tankerCodeLabel && (
+                                            <span className="px-2 py-0.5 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 rounded font-mono text-xs font-bold w-fit">
+                                                مخزن: {tankerCodeLabel}
+                                            </span>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <span className="text-slate-400 text-xs">---</span>
+                                )}
+                            </td>
+                        )}
+                        {visibleColumns.includes('licenseNo') && (
+                            <td className="px-6 py-4 font-mono text-xs text-slate-600 dark:text-slate-400">
+                                {d.licenseNo || '---'}
+                            </td>
+                        )}
                         {visibleColumns.includes('phone') && (<td className="px-6 py-4 text-slate-600 dark:text-slate-400">{d.phone}</td>)}
+                        {visibleColumns.includes('cardNumber') && (
+                            <td className="px-6 py-4 text-xs">
+                                {d.cardNumber ? (
+                                    <div className="font-mono text-slate-700 dark:text-slate-300" dir="ltr">
+                                        {d.cardNumber}
+                                    </div>
+                                ) : (
+                                    <span className="text-slate-400">---</span>
+                                )}
+                                {(d.bankName || d.accountHolderName) && (
+                                    <div className="text-[10px] text-slate-500 mt-0.5">
+                                        {d.bankName} {d.accountHolderName ? `(${d.accountHolderName})` : ''}
+                                    </div>
+                                )}
+                            </td>
+                        )}
                         {visibleColumns.includes('previousBalance') && (
                             <td className="px-6 py-4 bg-purple-50/20 dark:bg-purple-950/10">
                                 {hasPrevBalance ? (
@@ -1326,9 +1539,45 @@ const DriversList: React.FC = () => {
                         <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">نام و نام خانوادگی</label><input value={editForm.fullName} onChange={e => setEditForm({...editForm, fullName: e.target.value})} className="w-full p-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500" /></div>
                         <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">تلفن تماس</label><input value={editForm.phone} onChange={e => setEditForm({...editForm, phone: e.target.value})} className="w-full p-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500" /></div>
                         <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">کد ملی</label><input value={editForm.nationalId} onChange={e => setEditForm({...editForm, nationalId: e.target.value})} className="w-full p-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500" /></div>
-                        <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">شماره پلاک</label><input value={editForm.plateNumber} onChange={e => setEditForm({...editForm, plateNumber: e.target.value})} className="w-full p-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500" /></div>
-                        <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">شماره تانکر</label><input value={editForm.tankNumber} onChange={e => setEditForm({...editForm, tankNumber: e.target.value})} className="w-full p-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500" /></div>
+                        <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">شماره پلاک کامیون (کشنده)</label><input value={editForm.plateNumber} onChange={e => setEditForm({...editForm, plateNumber: e.target.value})} className="w-full p-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500" /></div>
+                        <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">کد مخصوص تانکر (مثال: T-101)</label><input value={editForm.tankerCode} onChange={e => setEditForm({...editForm, tankerCode: e.target.value})} className="w-full p-2 bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-lg text-slate-900 dark:text-white font-mono font-bold outline-none focus:ring-2 focus:ring-indigo-500" placeholder="T-101" /></div>
+                        <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">شماره مخزن تانکر</label><input value={editForm.tankNumber} onChange={e => setEditForm({...editForm, tankNumber: e.target.value})} className="w-full p-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-mono outline-none focus:ring-2 focus:ring-blue-500" /></div>
                         <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">شماره گواهینامه</label><input value={editForm.licenseNo} onChange={e => setEditForm({...editForm, licenseNo: e.target.value})} className="w-full p-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500" /></div>
+                        {(tankerUnits || []).length > 0 && (
+                          <div className="md:col-span-2 p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60">
+                            <label className="block text-xs font-black text-indigo-900 dark:text-indigo-200 mb-1">
+                              انتخاب یا تعویض تانکر بسته شده روی این کامیون از لیست تانکرهای شرکت:
+                            </label>
+                            <select
+                              value={editForm.mountedTankerId}
+                              onChange={e => {
+                                const uid = e.target.value;
+                                const unit = (tankerUnits || []).find(u => u.id === uid);
+                                if (unit) {
+                                  setEditForm({
+                                    ...editForm,
+                                    mountedTankerId: unit.id,
+                                    tankerCode: unit.tankerCode || editForm.tankerCode,
+                                    tankNumber: unit.tankNumber
+                                  });
+                                } else {
+                                  setEditForm({
+                                    ...editForm,
+                                    mountedTankerId: ''
+                                  });
+                                }
+                              }}
+                              className="w-full p-2 bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-lg text-xs font-bold text-slate-900 dark:text-white outline-none"
+                            >
+                              <option value="">-- انتخاب / تغییر تانکر از لیست ناوگان --</option>
+                              {(tankerUnits || []).map(u => (
+                                <option key={u.id} value={u.id}>
+                                  {u.tankerCode ? `[کد ${u.tankerCode}] ` : ''}شماره مخزن: {u.tankNumber} — {u.ownerName} ({u.status === 'MOUNTED' ? `متصل به: ${u.assignedDriverName || 'کامیون'}` : 'آزاد در پارکینگ'})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
                         <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">شماره شبا بانکی</label><input value={editForm.shebaNumber} onChange={e => setEditForm({...editForm, shebaNumber: e.target.value})} placeholder="IR..." dir="ltr" className="w-full p-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 font-mono text-left" /></div>
                         <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">شماره کارت بانکی (۱۶ رقمی)</label><input value={editForm.cardNumber} onChange={e => setEditForm({...editForm, cardNumber: e.target.value})} placeholder="---- ---- ---- ----" dir="ltr" className="w-full p-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 font-mono text-left tracking-widest" /></div>
                         <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">نام بانک</label><input value={editForm.bankName} onChange={e => setEditForm({...editForm, bankName: e.target.value})} placeholder="مثال: ملی، ملت..." className="w-full p-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500" /></div>
